@@ -28,14 +28,22 @@
 
 #define NXP_OUI	0x006037
 
-#define NXPWIFI_UTL_BYTE2UINT(x) (((uint32_t)*(x + 7) << 24)  + ((uint32_t)*(x + 6) << 16)  + ((uint32_t)*(x + 5) << 8) + (uint32_t)*x);
+#define HS_OFFLOAD_ARP 0x1
+#define HS_OFFLOAD_PING 0x2
+#define HS_WAKEON_MDNS 0x4
+
 enum nxpwifi_vendor_commands {
 	NXPWIFI_VENDOR_CMD_HSCFG,
-	NXPWIFI_VENDOR_CMD_SLEEPPD
+	NXPWIFI_VENDOR_CMD_SLEEPPD,
+	NXPWIFI_VENDOR_CMD_CLOCKSYNC,
+	NXPWIFI_VENDOR_CMD_HSOFFLOAD
 };
 
 enum nxpwifiutl_attrs {
 	NXPWIFI_HSCFG,
+	NXPWIFI_SLEEPPD,
+	NXPWIFI_CLKSYNC_CFG,
+	NXPWIFI_HS_OFFLOAD
 };
 
 struct nl80211_state {
@@ -61,12 +69,21 @@ struct nxpwifiutl_sleeppd_cfg {
     uint16_t	sleeppd;
 } __attribute__((packed));
 
+struct nxpwifiutl_hs_offload {
+	uint8_t		action;
+    uint8_t		offload;
+} __attribute__((packed));
+
+struct nxpwifiutl_hs_offload hsoffload = {0};
+
 static int process_hscfg(int argc, char *argv[]);
 static int process_sleeppd(int argc, char *argv[]);
+static int process_hsoffload(int argc, char *argv[]);
 
 struct command_node command_list[] = {
     {"hscfg",           process_hscfg},
-    {"sleeppd",         process_sleeppd},	
+    {"sleeppd",         process_sleeppd},
+	{"hsoffload",		process_hsoffload}
 };
 
 static char    *usage[] = {
@@ -92,6 +109,19 @@ static uint32_t bytes_to_unit32(uint8_t *bytes)
         | (uint32_t)bytes[2] << 16 | (uint32_t)bytes[+3] << 24;
 	
 	return thirty_two;
+}
+
+static int parse_argument(char *argstr, char *args,int *arg)
+{
+	int ret = 0;
+
+	if(strstr(argstr, args)) {
+		argstr += strlen(args);
+		sscanf(argstr, "%d", arg);
+		ret = 1;
+	}
+
+	return ret;
 }
 
 static int print_hscfg_response(struct nl_msg *msg, void *arg)
@@ -144,6 +174,29 @@ static int print_sleeppd_response(struct nl_msg *msg, void *arg)
 	sleep_pd = (*(data + 5) << 8) + *(data + 4);
 
 	fprintf(stdout, "sleep period: %d\n", sleep_pd);
+
+	return NL_OK;
+}
+
+static int print_hsoffload_response(struct nl_msg *msg, void *arg)
+{
+	struct nlattr *attr;
+	struct genlmsghdr *gnlh = nlmsg_data(nlmsg_hdr(msg));
+	uint8_t *data;
+	int len;
+
+	attr = nla_find(genlmsg_attrdata(gnlh, 0),
+			genlmsg_attrlen(gnlh, 0),
+			NL80211_ATTR_VENDOR_DATA);
+	if (!attr) {
+		fprintf(stderr, "vendor data attribute missing!\n");
+		return NL_SKIP;
+	}
+
+	data = (uint8_t *) nla_data(attr);
+	len = nla_len(attr);
+
+	hsoffload.offload = *(data + 4);
 
 	return NL_OK;
 }
@@ -249,8 +302,8 @@ static int process_sleeppd(int argc, char *argv[])
 	devidx = if_nametoindex(argv[1]);
 
     if (devidx == 0) {
-        if (errno == ENODEV )
-            fprintf(stderr, "No interface found with given name\n");
+		if (errno == ENODEV )
+			fprintf(stderr, "No interface found with given name\n");
         goto nla_put_failure;
     }
 
@@ -259,16 +312,15 @@ static int process_sleeppd(int argc, char *argv[])
 	NLA_PUT_U32(msg, NL80211_ATTR_VENDOR_ID, NXP_OUI);
 	NLA_PUT_U32(msg, NL80211_ATTR_VENDOR_SUBCMD, NXPWIFI_VENDOR_CMD_SLEEPPD);
 
-	if (argc == 4)
-		sscanf(argv[3], "%d", &sleepd_cfg.sleeppd);
-
 	if (argc == 3) {
 		cb = nl_cb_alloc(NL_CB_DEFAULT);
 		sleepd_cfg.action = 0;
 		register_handler(print_sleeppd_response, (void *) false);
 		nl_cb_set(cb, NL_CB_VALID, NL_CB_CUSTOM, valid_handler, NULL);
-	} else
+	} else {
 		sleepd_cfg.action = 1;
+		sscanf(argv[3], "%d", &sleepd_cfg.sleeppd);
+	}
 
 	NLA_PUT(msg, NL80211_ATTR_VENDOR_DATA, sizeof(sleepd_cfg), &sleepd_cfg);
 	
@@ -276,6 +328,128 @@ static int process_sleeppd(int argc, char *argv[])
 
 	if (sleepd_cfg.action == 0)
 		nl_recvmsgs(nlstate.nl_sock, cb);
+
+    return 0;
+nla_put_failure:
+
+    return 1;
+}
+
+/**
+ *  @brief Process the configuration for auto_arp and auto_ping.
+ *  @param argc   Number of arguments
+ *  @param argv   A pointer to arguments array
+ *  @return     0--success, otherwise--fail
+ */
+static int process_hsoffload(int argc, char *argv[])
+{
+    __u8 *buffer = NULL;
+	struct nl_msg *msg;
+	signed long long devidx = 0;
+	unsigned char action;
+	struct nl_cb *cb;
+	int auto_arp = 0, auto_ping = 0, wake_on_mdns = 0;
+	char *rdargv[3];
+
+	if ((argc > 6) || (argc < 3)) {
+		fprintf(stderr, "wrong argument numbers.\n");
+		return 1;
+	}
+
+	msg = nlmsg_alloc();
+	if (!msg) {
+		fprintf(stderr, "failed to allocate netlink message\n");
+		return 1;
+	}
+
+    if ( NULL == genlmsg_put(msg, 0, 0, nlstate.nl80211_id, 0,
+	            0, NL80211_CMD_VENDOR, 0))
+        goto nla_put_failure;
+
+	devidx = if_nametoindex(argv[1]);
+
+    if (devidx == 0) {
+        if (errno == ENODEV)
+            fprintf(stderr, "%s: %s\n", strerror(errno), argv[1]);
+
+        goto nla_put_failure;
+    }
+
+	NLA_PUT_U32(msg, NL80211_ATTR_IFINDEX, devidx);
+
+	NLA_PUT_U32(msg, NL80211_ATTR_VENDOR_ID, NXP_OUI);
+	NLA_PUT_U32(msg, NL80211_ATTR_VENDOR_SUBCMD, NXPWIFI_VENDOR_CMD_HSOFFLOAD);
+
+	if (argc == 3) {
+		cb = nl_cb_alloc(NL_CB_DEFAULT);
+		hsoffload.action = 0;
+		register_handler(print_hsoffload_response, (void *) false);
+		nl_cb_set(cb, NL_CB_VALID, NL_CB_CUSTOM, valid_handler, NULL);
+	} else {
+		rdargv[0] = argv[0];
+		rdargv[1] = argv[1];
+		rdargv[2] = NULL;
+		process_hsoffload(3, rdargv);
+		hsoffload.action = 1;
+
+		while (argc >= 4) {
+			if (parse_argument(argv[argc -1], "autoarp=", &auto_arp)) {
+				if(auto_arp)
+					hsoffload.offload |= HS_OFFLOAD_ARP;
+				else
+					hsoffload.offload &= ~HS_OFFLOAD_ARP;
+			}
+
+			if (parse_argument(argv[argc -1], "autoping=", &auto_ping)) {
+				if(auto_ping)
+					hsoffload.offload |= HS_OFFLOAD_PING;
+				else
+					hsoffload.offload &= ~HS_OFFLOAD_PING;
+			}
+
+			if (parse_argument(argv[argc -1], "wakeonmdns=", &wake_on_mdns)) {
+				if(wake_on_mdns)
+					hsoffload.offload |= HS_WAKEON_MDNS;
+				else
+					hsoffload.offload &= ~HS_WAKEON_MDNS;
+			}
+
+			argc--;
+		}
+	}
+
+	NLA_PUT(msg, NL80211_ATTR_VENDOR_DATA, sizeof(hsoffload), &hsoffload);
+
+	nl_send_auto(nlstate.nl_sock, msg);
+
+	if (hsoffload.action == 0) {
+		nl_recvmsgs(nlstate.nl_sock, cb);
+
+		if (argv[2] != NULL) {
+			printf("Auto-arp is ");
+
+			if(hsoffload.offload & HS_OFFLOAD_ARP)
+				printf("enabled, ");
+			else
+				printf("disabled, ");
+
+			printf("Auto-ping is ");
+
+			if (hsoffload.offload & HS_OFFLOAD_PING)
+				printf("enabled, ");
+			else
+				printf("disabled, ");
+
+			printf("Wake-on-mDNS is ");
+
+			if (hsoffload.offload & HS_WAKEON_MDNS)
+				printf("enabled");
+			else
+				printf("disabled");
+
+			printf(".\n");
+		}
+	}
 
     return 0;
 nla_put_failure:
@@ -424,7 +598,6 @@ int main(int argc, char *argv[])
     if (ret != 0) {
         //ret = process_generic(argc, argv);
         if (ret) {
-            fprintf(stderr, "Invalid command specified!\n");
             display_usage();
             err = 1;
         }
