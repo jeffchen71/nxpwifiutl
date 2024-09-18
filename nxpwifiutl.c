@@ -36,7 +36,8 @@ enum nxpwifi_vendor_commands {
 	NXPWIFI_VENDOR_CMD_HSCFG,
 	NXPWIFI_VENDOR_CMD_SLEEPPD,
 	NXPWIFI_VENDOR_CMD_CLOCKSYNC,
-	NXPWIFI_VENDOR_CMD_HSOFFLOAD
+	NXPWIFI_VENDOR_CMD_HSOFFLOAD,
+	NXPWIFI_VENDOR_CMD_CHANNELSWITCH = 6
 };
 
 enum nxpwifiutl_attrs {
@@ -74,16 +75,31 @@ struct nxpwifiutl_hs_offload {
     uint8_t		offload;
 } __attribute__((packed));
 
+struct nxpwifiutl_chan_switch {
+	uint8_t mode;
+	uint8_t chan_switch_mode;
+	uint8_t new_oper_class;
+    uint8_t new_channel_num;
+	uint8_t chan_switch_count;
+	union {
+		uint8_t bandwidth;
+		uint8_t num_pkts;
+		uint8_t num_retry_pkts;
+	} bw_retry;
+} __attribute__((packed));
+
 struct nxpwifiutl_hs_offload hsoffload = {0};
 
 static int process_hscfg(int argc, char *argv[]);
 static int process_sleeppd(int argc, char *argv[]);
 static int process_hsoffload(int argc, char *argv[]);
+static int process_channel_switch(int argc, char *argv[]);
 
 struct command_node command_list[] = {
     {"hscfg",           process_hscfg},
     {"sleeppd",         process_sleeppd},
-	{"hsoffload",		process_hsoffload}
+	{"hsoffload",		process_hsoffload},
+	{"channel_switch",	process_channel_switch}
 };
 
 static char    *usage[] = {
@@ -350,6 +366,8 @@ static int process_hsoffload(int argc, char *argv[])
 	struct nl_cb *cb;
 	int auto_arp = 0, auto_ping = 0, wake_on_mdns = 0;
 	char *rdargv[3];
+    struct nlattr *currattr;
+	int rem;
 
 	if ((argc > 6) || (argc < 3)) {
 		fprintf(stderr, "wrong argument numbers.\n");
@@ -420,6 +438,11 @@ static int process_hsoffload(int argc, char *argv[])
 
 	NLA_PUT(msg, NL80211_ATTR_VENDOR_DATA, sizeof(hsoffload), &hsoffload);
 
+	nlmsg_for_each_attr(currattr, nlmsg_hdr(msg), NLMSG_HDRLEN, rem)
+	{
+		printf("type:%d len:%d\n", currattr->nla_type, currattr->nla_len);
+	}
+
 	nl_send_auto(nlstate.nl_sock, msg);
 
 	if (hsoffload.action == 0) {
@@ -453,6 +476,129 @@ static int process_hsoffload(int argc, char *argv[])
 
     return 0;
 nla_put_failure:
+
+    return 1;
+}
+
+/**
+ *  @brief Process the configuration for auto_arp and auto_ping.
+ *  @param argc   Number of arguments
+ *  @param argv   A pointer to arguments array
+ *  @return     0--success, otherwise--fail
+ */
+static int process_channel_switch(int argc, char *argv[])
+{
+    __u8 *buffer = NULL;
+	struct nl_msg *msg = NULL, *nested = NULL;
+	signed long long devidx = 0;
+	unsigned char action;
+	struct nl_cb *cb;
+	uint8_t band;
+	unsigned int switch_mode, class, channel, switch_count, bw_pktno, mode; 
+	int count = 0;
+	struct nxpwifiutl_chan_switch chsw_cfg;
+    struct nlattr *opts = NULL, *currattr;
+	int rem;
+
+	if (argc > 9) {
+		fprintf(stderr, "Too many arguments\n");
+		return 1;
+	}
+
+	if (argc < 6) {
+		fprintf(stderr, "Too few arguments\n");
+		return 1;
+	}
+
+	msg = nlmsg_alloc();
+	if (!msg) {
+		fprintf(stderr, "failed to allocate netlink message\n");
+		return 1;
+	}
+
+	nested = nlmsg_alloc();
+	if (!nested) {
+		nlmsg_free(msg);
+		fprintf(stderr, "failed to allocate nested netlink message\n");
+		return 1;
+	}
+
+    if ( NULL == genlmsg_put(msg, 0, 0, nlstate.nl80211_id, 0,
+	            0, NL80211_CMD_VENDOR, 0))
+        goto nla_put_failure;
+
+	devidx = if_nametoindex(argv[1]);
+
+    if (devidx == 0) {
+        if (errno == ENODEV)
+            fprintf(stderr, "%s: %s\n", strerror(errno), argv[1]);
+
+        goto nla_put_failure;
+    }
+
+	NLA_PUT_U32(msg, NL80211_ATTR_IFINDEX, devidx);
+
+	NLA_PUT_U32(msg, NL80211_ATTR_VENDOR_ID, NXP_OUI);
+	NLA_PUT_U32(msg, NL80211_ATTR_VENDOR_SUBCMD, NXPWIFI_VENDOR_CMD_CHANNELSWITCH);
+
+	count = sscanf(argv[3], "%u", &switch_mode);
+	chsw_cfg.chan_switch_mode = (uint8_t)switch_mode;
+	count = sscanf(argv[4], "%u", &class);
+	chsw_cfg.new_oper_class = (uint8_t)class;
+	
+    count = sscanf(argv[5], "%u", &channel);
+	chsw_cfg.new_channel_num = (uint8_t)channel;
+
+	count = sscanf(argv[6], "%u", &switch_count);
+	chsw_cfg.chan_switch_count = (uint8_t)switch_count;
+
+	if (argc >= 8) {
+		sscanf(argv[7], "%d", &bw_pktno);
+	}
+
+	if (argc >= 9)
+		sscanf(argv[8], "%d", &mode);
+
+	if (argc == 7) {
+		memset(&chsw_cfg.bw_retry, 0, sizeof(chsw_cfg.bw_retry));
+		chsw_cfg.bw_retry.bandwidth = 0;
+		chsw_cfg.mode = 0;
+		if (chsw_cfg.chan_switch_count == 0) {
+			fprintf(stderr, "Invalid arguments\n");
+			goto nla_put_failure;
+		}		
+	}
+
+	if (argc == 8) {
+		if (chsw_cfg.chan_switch_count != 0)
+			chsw_cfg.bw_retry.bandwidth = (uint8_t)bw_pktno;
+		else
+			chsw_cfg.bw_retry.num_pkts = (uint8_t)bw_pktno;
+		chsw_cfg.mode = 0;
+	}
+
+	if (argc == 9) {
+		chsw_cfg.mode = (uint8_t)mode;
+		chsw_cfg.bw_retry.num_retry_pkts = (uint8_t)bw_pktno;
+	}
+
+	NLA_PUT(nested, 7, sizeof(chsw_cfg), &chsw_cfg);
+	nla_put_nested(msg, NL80211_ATTR_VENDOR_DATA, nested);
+
+	count = nl_send_auto(nlstate.nl_sock, msg);
+
+    if (count < 0) {
+        fprintf(stderr, "failed to sent MSG: %s\n", strerror(count));
+		goto nla_put_failure;
+	}
+
+	nlmsg_free(nested);
+	nlmsg_free(msg);
+
+	return 0;
+nla_put_failure:
+	nlmsg_free(nested);
+	nlmsg_free(msg);
 
     return 1;
 }
