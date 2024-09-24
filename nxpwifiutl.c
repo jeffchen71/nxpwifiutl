@@ -37,14 +37,26 @@ enum nxpwifi_vendor_commands {
 	NXPWIFI_VENDOR_CMD_SLEEPPD,
 	NXPWIFI_VENDOR_CMD_CLOCKSYNC,
 	NXPWIFI_VENDOR_CMD_HSOFFLOAD,
-	NXPWIFI_VENDOR_CMD_CHANNELSWITCH = 6
+	NXPWIFI_VENDOR_CMD_CHANNELSWITCH = 6,
+	NXPWIFI_VENDOR_CMD_ANTCFG = 7,
 };
 
 enum nxpwifiutl_attrs {
 	NXPWIFI_HSCFG,
 	NXPWIFI_SLEEPPD,
 	NXPWIFI_CLKSYNC_CFG,
-	NXPWIFI_HS_OFFLOAD
+	NXPWIFI_HS_OFFLOAD,
+	NXPWIFI_INDRST_CFG,
+	NXPWIFI_ATTR_CSI_CONFIG,
+	NXPWIFI_ATTR_MAC_ADDR,
+	NXPWIFI_ATTR_CHSWITCH,
+	NXPWIFI_ATTR_MAX
+};
+
+enum nxpwifi_antenna_attrs {
+	NXPWIFI_ANTENNA_MODE = 1,
+	NXPWIFI_SAD_EVAL_TIME,
+	NXPWIFI_ANTENNA_ATTR_MAX
 };
 
 struct nl80211_state {
@@ -94,12 +106,19 @@ static int process_hscfg(int argc, char *argv[]);
 static int process_sleeppd(int argc, char *argv[]);
 static int process_hsoffload(int argc, char *argv[]);
 static int process_channel_switch(int argc, char *argv[]);
+static int process_antenna_cfg(int argc, char *argv[]);
 
 struct command_node command_list[] = {
     {"hscfg",           process_hscfg},
     {"sleeppd",         process_sleeppd},
 	{"hsoffload",		process_hsoffload},
-	{"channel_switch",	process_channel_switch}
+	{"channel_switch",	process_channel_switch},
+	{"antcfg",	process_antenna_cfg}
+};
+
+static struct nla_policy antenna_policy[NXPWIFI_ANTENNA_ATTR_MAX + 1] = {
+    [NXPWIFI_ANTENNA_MODE] = {.type = NLA_U16},
+    [NXPWIFI_SAD_EVAL_TIME] = {.type = NLA_U16},
 };
 
 static char    *usage[] = {
@@ -213,6 +232,35 @@ static int print_hsoffload_response(struct nl_msg *msg, void *arg)
 	len = nla_len(attr);
 
 	hsoffload.offload = *(data + 4);
+
+	return NL_OK;
+}
+
+static int print_antcfg_response(struct nl_msg *msg, void *arg)
+{
+	struct genlmsghdr *gnlh = nlmsg_data(nlmsg_hdr(msg));
+	struct nlattr *attr;
+	struct nlattr *tb[NXPWIFI_ANTENNA_ATTR_MAX + 1];
+	uint16_t ant_mode;
+
+	attr = nla_find(genlmsg_attrdata(gnlh, 0), genlmsg_attrlen(gnlh, 0),
+			NL80211_ATTR_VENDOR_DATA);
+	if (!attr) {
+		fprintf(stderr, "vendor data attribute missing!\n");
+		return NL_SKIP;
+	}
+
+	if (nla_parse_nested(tb, NXPWIFI_ANTENNA_ATTR_MAX, attr, NULL) < 0) {
+		fprintf(stderr, "failed to parse nested antenna attributes\n");
+		return NL_SKIP;
+	}
+
+	if (tb[NXPWIFI_ANTENNA_MODE]) {
+		ant_mode = nla_get_u16(tb[NXPWIFI_ANTENNA_MODE]);
+		printf("antenna mode: %u\n", ant_mode);
+	} else {
+		fprintf(stderr, "antenna mode attribute missing!\n");
+	}
 
 	return NL_OK;
 }
@@ -335,7 +383,7 @@ static int process_sleeppd(int argc, char *argv[])
 		nl_cb_set(cb, NL_CB_VALID, NL_CB_CUSTOM, valid_handler, NULL);
 	} else {
 		sleepd_cfg.action = 1;
-		sscanf(argv[3], "%d", &sleepd_cfg.sleeppd);
+		sscanf(argv[3], "%hu", &sleepd_cfg.sleeppd);
 	}
 
 	NLA_PUT(msg, NL80211_ATTR_VENDOR_DATA, sizeof(sleepd_cfg), &sleepd_cfg);
@@ -481,7 +529,7 @@ nla_put_failure:
 }
 
 /**
- *  @brief Process the configuration for auto_arp and auto_ping.
+ *  @brief Process the configuration for channel switch.
  *  @param argc   Number of arguments
  *  @param argv   A pointer to arguments array
  *  @return     0--success, otherwise--fail
@@ -591,6 +639,100 @@ static int process_channel_switch(int argc, char *argv[])
         fprintf(stderr, "failed to sent MSG: %s\n", strerror(count));
 		goto nla_put_failure;
 	}
+
+	nlmsg_free(nested);
+	nlmsg_free(msg);
+
+	return 0;
+nla_put_failure:
+	nlmsg_free(nested);
+	nlmsg_free(msg);
+
+    return 1;
+}
+
+/**
+ *  @brief Process the configuration for channel switch.
+ *  @param argc   Number of arguments
+ *  @param argv   A pointer to arguments array
+ *  @return     0--success, otherwise--fail
+ */
+static int process_antenna_cfg(int argc, char *argv[])
+{
+    __u8 *buffer = NULL;
+	struct nl_msg *msg = NULL, *nested = NULL;
+	signed long long devidx = 0;
+	unsigned char action;
+	struct nl_cb *cb;
+	int count = 0;
+	unsigned int ant_mode = 0, eval_time;
+
+	if (argc > 5) {
+		fprintf(stderr, "Too many arguments\n");
+		return 1;
+	}
+
+	if (argc < 3) {
+		fprintf(stderr, "Too few arguments\n");
+		return 1;
+	}
+
+	msg = nlmsg_alloc();
+	if (!msg) {
+		fprintf(stderr, "failed to allocate netlink message\n");
+		return 1;
+	}
+
+	nested = nlmsg_alloc();
+	if (!nested) {
+		nlmsg_free(msg);
+		fprintf(stderr, "failed to allocate nested netlink message\n");
+		return 1;
+	}
+
+    if ( NULL == genlmsg_put(msg, 0, 0, nlstate.nl80211_id, 0,
+	            0, NL80211_CMD_VENDOR, 0))
+        goto nla_put_failure;
+
+	devidx = if_nametoindex(argv[1]);
+
+    if (devidx == 0) {
+        if (errno == ENODEV)
+            fprintf(stderr, "%s: %s\n", strerror(errno), argv[1]);
+
+        goto nla_put_failure;
+    }
+
+	NLA_PUT_U32(msg, NL80211_ATTR_IFINDEX, devidx);
+
+	NLA_PUT_U32(msg, NL80211_ATTR_VENDOR_ID, NXP_OUI);
+	NLA_PUT_U32(msg, NL80211_ATTR_VENDOR_SUBCMD, NXPWIFI_VENDOR_CMD_ANTCFG);
+
+	if (argc >= 4) {
+		count = sscanf(argv[3], "%u", &ant_mode);
+		NLA_PUT_U16(nested, NXPWIFI_ANTENNA_MODE, (uint16_t)ant_mode);
+
+		if (argc > 4) {
+			count = sscanf(argv[4], "%u", &eval_time);
+			NLA_PUT_U16(nested, NXPWIFI_SAD_EVAL_TIME, (uint16_t)eval_time);
+		}
+
+		nla_put_nested(msg, NL80211_ATTR_VENDOR_DATA, nested);
+	} else {
+		cb = nl_cb_alloc(NL_CB_DEFAULT);
+		register_handler(print_antcfg_response, (void *) false);
+		nl_cb_set(cb, NL_CB_VALID, NL_CB_CUSTOM, valid_handler, NULL);
+	}
+
+	count = nl_send_auto(nlstate.nl_sock, msg);
+
+    if (count < 0) {
+        fprintf(stderr, "failed to sent MSG: %s\n", strerror(count));
+		goto nla_put_failure;
+	}
+
+	if (argc == 3)
+		nl_recvmsgs(nlstate.nl_sock, cb);
 
 	nlmsg_free(nested);
 	nlmsg_free(msg);
