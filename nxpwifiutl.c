@@ -32,6 +32,9 @@
 #define HS_OFFLOAD_PING 0x2
 #define HS_WAKEON_MDNS 0x4
 
+#define NXPWIFI_MAX_ARGC 10
+#define NXPWIFI_MAX_CMD_NAME_SIZE 32
+
 enum nxpwifi_vendor_commands {
 	NXPWIFI_VENDOR_CMD_HSCFG,
 	NXPWIFI_VENDOR_CMD_SLEEPPD,
@@ -39,6 +42,7 @@ enum nxpwifi_vendor_commands {
 	NXPWIFI_VENDOR_CMD_HSOFFLOAD,
 	NXPWIFI_VENDOR_CMD_CHANNELSWITCH = 6,
 	NXPWIFI_VENDOR_CMD_ANTCFG = 7,
+	NXPWIFI_VENDOR_CMD_EDMAC_CFG = 8,
 };
 
 enum nxpwifiutl_attrs {
@@ -57,6 +61,19 @@ enum nxpwifi_antenna_attrs {
 	NXPWIFI_ANTENNA_MODE = 1,
 	NXPWIFI_SAD_EVAL_TIME,
 	NXPWIFI_ANTENNA_ATTR_MAX
+};
+
+enum nxpwifi_edmac_attrs {
+	NXPWIFI_EDMAC_CTRL_2G = 1,
+	NXPWIFI_EDMAC_OFFSET_2G,
+	NXPWIFI_EDMAC_CTRL_5G,
+	NXPWIFI_EDMAC_OFFSET_5G,
+	NXPWIFI_EDMAC_TXQ_LOCK,
+	NXPWIFI_EDMAC_MAX
+};
+
+enum nxpwifi_host_cmds {
+    NXPWIFI_CMD_ED_CTRL = 0x0130
 };
 
 struct nl80211_state {
@@ -100,6 +117,14 @@ struct nxpwifiutl_chan_switch {
 	} bw_retry;
 } __attribute__((packed));
 
+struct nxpwifiutl_edmac_cfg {
+	uint16_t ed_2g_enable;
+	uint16_t ed_2g_offset;
+	uint16_t ed_5g_enable;
+	uint16_t ed_5g_offset;
+	uint32_t ed_txq_lock;
+} __attribute__((packed));
+
 struct nxpwifiutl_hs_offload hsoffload = {0};
 
 static int process_hscfg(int argc, char *argv[]);
@@ -107,13 +132,18 @@ static int process_sleeppd(int argc, char *argv[]);
 static int process_hsoffload(int argc, char *argv[]);
 static int process_channel_switch(int argc, char *argv[]);
 static int process_antenna_cfg(int argc, char *argv[]);
+static int process_edmac_cfg(int argc, char *argv[]);
+static int process_hostcmd(int argc, char *argv[]);
+static char *nxpwifi_config_get_line(FILE *fp, char *str, int size, int *lineno);
 
 struct command_node command_list[] = {
-    {"hscfg",           process_hscfg},
-    {"sleeppd",         process_sleeppd},
-	{"hsoffload",		process_hsoffload},
-	{"channel_switch",	process_channel_switch},
-	{"antcfg",	process_antenna_cfg}
+    {"hscfg", process_hscfg},
+    {"sleeppd", process_sleeppd},
+    {"hsoffload", process_hsoffload},
+    {"channel_switch", process_channel_switch},
+    {"antcfg", process_antenna_cfg},
+    {"edmac_cfg", process_edmac_cfg},
+    {"hostcmd", process_hostcmd}
 };
 
 static struct nla_policy antenna_policy[NXPWIFI_ANTENNA_ATTR_MAX + 1] = {
@@ -260,6 +290,54 @@ static int print_antcfg_response(struct nl_msg *msg, void *arg)
 		printf("antenna mode: %u\n", ant_mode);
 	} else {
 		fprintf(stderr, "antenna mode attribute missing!\n");
+	}
+
+	return NL_OK;
+}
+
+static int print_edmac_cfg_response(struct nl_msg *msg, void *arg)
+{
+	struct nlattr *attr;
+	struct genlmsghdr *gnlh = nlmsg_data(nlmsg_hdr(msg));
+	uint16_t *attr_data;
+	uint32_t *txq_lock;
+	int len;
+	uint8_t *data;
+	struct nlattr *tb_vendor[NXPWIFI_EDMAC_MAX + 1];
+
+	attr = nla_find(genlmsg_attrdata(gnlh, 0),
+			genlmsg_attrlen(gnlh, 0),
+			NL80211_ATTR_VENDOR_DATA);
+	if (!attr) {
+		fprintf(stderr, "vendor data attribute missing!\n");
+		return NL_SKIP;
+	}
+
+	nla_parse_nested(tb_vendor, NXPWIFI_EDMAC_MAX, attr, NULL);
+
+	if (tb_vendor[NXPWIFI_EDMAC_CTRL_2G]) {
+		attr_data = (uint16_t *) nla_data(tb_vendor[NXPWIFI_EDMAC_CTRL_2G]);
+		fprintf(stdout, "edmac_2G:0x%02x\n", *attr_data);
+	}
+
+	if (tb_vendor[NXPWIFI_EDMAC_OFFSET_2G]) {
+		attr_data = (uint16_t *) nla_data(tb_vendor[NXPWIFI_EDMAC_OFFSET_2G]);
+		fprintf(stdout, "offset_2G:0x%02x\n", *attr_data);
+	}
+
+	if (tb_vendor[NXPWIFI_EDMAC_CTRL_5G]) {
+		attr_data = (uint16_t *) nla_data(tb_vendor[NXPWIFI_EDMAC_CTRL_5G]);
+		fprintf(stdout, "edmac_5G:0x%02x\n", *attr_data);
+	}
+
+	if (tb_vendor[NXPWIFI_EDMAC_OFFSET_5G]) {
+		attr_data = (uint16_t *) nla_data(tb_vendor[NXPWIFI_EDMAC_OFFSET_5G]);
+		fprintf(stdout, "offset_5G:0x%02x\n", *attr_data);
+	}
+
+	if (tb_vendor[NXPWIFI_EDMAC_TXQ_LOCK]) {
+		txq_lock = (uint32_t *) nla_data(tb_vendor[NXPWIFI_EDMAC_TXQ_LOCK]);
+		fprintf(stdout, "txq_lock:0x%02x\n", *txq_lock);
 	}
 
 	return NL_OK;
@@ -743,6 +821,497 @@ nla_put_failure:
 	nlmsg_free(msg);
 
     return 1;
+}
+
+/**
+ *  @brief Process the configuration for EDMAC.
+ *  @param argc   Number of arguments
+ *  @param argv   A pointer to arguments array
+ *  @return     0--success, otherwise--fail
+ */
+static int process_edmac_cfg(int argc, char *argv[])
+{
+    __u8 *buffer = NULL;
+	struct nl_msg *msg = NULL;
+	signed long long devidx = 0;
+	unsigned char action;
+	struct nl_cb *cb;
+	int count = 0;
+	unsigned int ed_ctrl_2g = 0, ed_ctrl_5g, ed_bitmap_txq_lock;
+	int ed_offset_2g, ed_offset_5g;
+	struct nlattr *nested;
+	if (argc > 8) {
+		fprintf(stderr, "Too many arguments\n");
+		return 1;
+	} else if (argc < 3) {
+		fprintf(stderr, "Too few arguments\n");
+		return 1;
+	} else if ((argc != 8 ) && (argc != 3)) {
+		fprintf(stderr, "wrong argument numbers.\n");
+		return 1;
+	}
+
+	msg = nlmsg_alloc();
+	if (!msg) {
+		fprintf(stderr, "failed to allocate netlink message\n");
+		return 1;
+	}
+
+    if ( NULL == genlmsg_put(msg, 0, 0, nlstate.nl80211_id, 0,
+	            0, NL80211_CMD_VENDOR, 0))
+        goto nla_put_failure;
+
+	devidx = if_nametoindex(argv[1]);
+
+    if (devidx == 0) {
+        if (errno == ENODEV)
+            fprintf(stderr, "%s: %s\n", strerror(errno), argv[1]);
+
+        goto nla_put_failure;
+    }
+
+	NLA_PUT_U32(msg, NL80211_ATTR_IFINDEX, devidx);
+
+	NLA_PUT_U32(msg, NL80211_ATTR_VENDOR_ID, NXP_OUI);
+	NLA_PUT_U32(msg, NL80211_ATTR_VENDOR_SUBCMD, NXPWIFI_VENDOR_CMD_EDMAC_CFG);
+
+	if (argc == 8) {
+		nested = nla_nest_start(msg, NL80211_ATTR_VENDOR_DATA);
+		count = sscanf(argv[3], "0x%x", &ed_ctrl_2g);
+		NLA_PUT_U16(msg, NXPWIFI_EDMAC_CTRL_2G, (uint16_t)ed_ctrl_2g);
+		count = sscanf(argv[4], "0x%x", &ed_offset_2g);
+		NLA_PUT_S16(msg, NXPWIFI_EDMAC_OFFSET_2G, (int16_t)ed_offset_2g);
+		count = sscanf(argv[5], "0x%x", &ed_ctrl_5g);
+		NLA_PUT_U16(msg, NXPWIFI_EDMAC_CTRL_5G, (uint16_t)ed_ctrl_5g);
+		count = sscanf(argv[6], "0x%x", &ed_offset_5g);
+		NLA_PUT_S16(msg, NXPWIFI_EDMAC_OFFSET_5G, (int16_t)ed_offset_5g);
+
+		count = sscanf(argv[7], "0x%x", &ed_bitmap_txq_lock);
+		NLA_PUT_U32(msg, NXPWIFI_EDMAC_TXQ_LOCK, (uint32_t)ed_bitmap_txq_lock);
+		nla_nest_end(msg, nested);
+	} else {
+		cb = nl_cb_alloc(NL_CB_DEFAULT);
+		register_handler(print_edmac_cfg_response, (void *) false);
+		nl_cb_set(cb, NL_CB_VALID, NL_CB_CUSTOM, valid_handler, NULL);
+	}
+
+	count = nl_send_auto(nlstate.nl_sock, msg);
+
+    if (count < 0) {
+        fprintf(stderr, "failed to sent MSG: %s\n", strerror(count));
+		goto nla_put_failure;
+	}
+
+	if (argc == 3)
+		nl_recvmsgs(nlstate.nl_sock, cb);
+
+	nlmsg_free(msg);
+
+	return 0;
+nla_put_failure:
+	nlmsg_free(msg);
+
+    return 1;
+}
+
+
+/**
+ *  @brief Convert char to hex integer
+ *
+ *  @param chr      Char
+ *  @return         Hex integer
+ */
+unsigned char hexc2bin(char chr)
+{
+    if (chr >= '0' && chr <= '9')
+        chr -= '0';
+    else if (chr >= 'A' && chr <= 'F')
+        chr -= ('A' - 10);
+    else if (chr >= 'a' && chr <= 'f')
+        chr -= ('a' - 10);
+
+    return chr;
+}
+
+unsigned int a2hex_or_atoi(char *value)
+{
+	int count = 0;
+	unsigned int hexno;
+
+	count = sscanf(value, "0x%x", &hexno);
+
+	if (count > 0) {
+		return hexno;
+    } else {
+        return (unsigned int)atoi(value);
+    }
+}
+/** Command buffer max length */
+#define BUFFER_LENGTH       (4 * 1024)
+
+/**
+ *  @brief get hostcmd data
+ *
+ *  @param ln           A pointer to line number
+ *  @param buf          A pointer to hostcmd data
+ *  @param size         A pointer to the return size of hostcmd buffer
+ *  @return             MLAN_STATUS_SUCCESS
+ */
+static int nxpwifi_get_hostcmd_data(FILE *fp, int *ln, unsigned char *buf, unsigned short *size)
+{
+    int   errors = 0, i;
+    char    line[512], *pos, *pos1, *pos2, *pos3;
+    unsigned short   len;
+
+
+    while ((pos = nxpwifi_config_get_line(fp, line, sizeof(line), ln))) {
+        (*ln)++;
+        if (strcmp(pos, "}") == 0) {
+            break;
+        }
+
+        pos1 = strchr(pos, ':');
+        if (pos1 == NULL) {
+            printf("Line %d: Invalid hostcmd line '%s'\n", *ln, pos);
+            errors++;
+            continue;
+        }
+        *pos1++ = '\0';
+        pos2 = strchr(pos1, '=');
+        if (pos2 == NULL) {
+            printf("Line %d: Invalid hostcmd line '%s'\n", *ln, pos);
+            errors++;
+            continue;
+        }
+        *pos2++ = '\0';
+
+        len = a2hex_or_atoi(pos1);
+
+        if (len < 1 || len > BUFFER_LENGTH) {
+            printf("Line %d: Invalid hostcmd line '%s'\n", *ln, pos);
+            errors++;
+            continue;
+        }
+
+        *size += len;
+
+        if (*pos2 == '"') {
+            pos2++;
+            pos3 = strchr(pos2, '"');
+            if (pos3 == NULL) {
+                printf("Line %d: invalid quotation '%s'\n", *ln, pos);
+                errors++;
+                continue;
+            }
+            *pos3 = '\0';
+            memset(buf, 0, len);
+			len = strlen(pos2) < len ? strlen(pos2) : len;
+            memmove(buf, &pos2, len);
+            buf += len;
+        }
+        else if (*pos2 == '\'') {
+            pos2++;
+            pos3 = strchr(pos2, '\'');
+            if (pos3 == NULL) {
+                printf("Line %d: invalid quotation '%s'\n", *ln, pos);
+                errors++;
+                continue;
+            }
+            *pos3 = ',';
+            for (i=0; i<len; i++) {
+                pos3 = strchr(pos2, ',');
+                if (pos3 != NULL) {
+                    *pos3 = '\0';
+                    *buf++ = (unsigned char)a2hex_or_atoi(pos2);
+                    pos2 = pos3 + 1;
+                }
+                else
+                    *buf++ = 0;
+            }
+        }
+        else if (*pos2 == '{') {
+            unsigned short tlvlen = 0, tmp_tlvlen;
+            nxpwifi_get_hostcmd_data(fp, ln, buf+len, &tlvlen);
+            tmp_tlvlen = tlvlen;
+            while (len--) {
+                *buf++ = (unsigned char)(tmp_tlvlen & 0xff);
+                tmp_tlvlen >>= 8;
+            }
+            *size += tlvlen;
+            buf += tlvlen;
+        }
+        else {
+            unsigned int value = a2hex_or_atoi(pos2);
+            while (len--) {
+                *buf++ = (unsigned char)(value & 0xff);
+                value >>= 8;
+            }
+        }
+    }
+    return 0;
+}
+
+/**
+ *  @brief Get one line from the File
+ *
+ *  @param fp       File handler
+ *  @param str      Storage location for data.
+ *  @param size     Maximum number of characters to read.
+ *  @param lineno   A pointer to return current line number
+ *  @return         returns string or NULL
+ */
+char *nxpwifi_config_get_line(FILE* fp, char *str, int size, int *lineno)
+{
+    char *start, *end;
+    int out, next_line;
+
+    if (!fp || !str)
+        return NULL;
+
+    do {
+read_line:
+        if (!fgets(str, size, fp))
+            break;
+        start = str;
+        start[size - 1] = '\0';
+        end = start + strlen(str);
+        (*lineno)++;
+
+        out = 1;
+        while (out && (start < end)) {
+            next_line = 0;
+            /* Remove empty lines and lines starting with # */
+            switch (start[0]) {
+            case ' ':  /* White space */
+            case '\t': /* Tab */
+                start ++;
+                break;
+            case '#':
+            case '\n':
+            case '\0':
+                next_line = 1;
+                break;
+            case '\r':
+                if (start[1] == '\n')
+                    next_line = 1;
+                else
+                    start ++;
+                break;
+            default:
+                out = 0;
+                break;
+            }
+            if (next_line)
+                goto read_line;
+        }
+
+        /* Remove # comments unless they are within a double quoted
+         * string. Remove trailing white space. */
+        end = strstr(start, "\"");
+        if (end) {
+            end = strstr(end + 1, "\"");
+            if (!end)
+                end = start;
+        } else
+            end = start;
+
+        end = strstr(end + 1, "#");
+        if (end)
+            *end-- = '\0';
+        else
+            end = start + strlen(start) - 1;
+
+        out = 1;
+        while (out && (start < end)) {
+            switch (*end) {
+            case ' ':  /* White space */
+            case '\t': /* Tab */
+            case '\n':
+            case '\r':
+                *end = '\0';
+                end --;
+                break;
+            default:
+                out = 0;
+                break;
+            }
+        }
+
+        if (*start == '\0')
+            continue;
+
+        return start;
+    } while(1);
+
+    return NULL;
+}
+
+/**
+ *  @brief Prepare host-command buffer
+ *  @param fp       File handler
+ *  @param cmd_name Command name
+ *  @param buf      A pointer to comand buffer
+ *  @return         MLAN_STATUS_SUCCESS--success, otherwise--fail
+ */
+static int prepare_host_cmd_buffer(FILE* fp, char *cmd_name, unsigned char *buf, uint16_t *len, unsigned short *hostcmd)
+{
+    char        line[256], cmdname[256], *pos, cmdcode[10];
+    int     ln = 0, count = 0;
+    int     cmdname_found = 0, cmdcode_found = 0;
+	unsigned short cmd;
+
+	snprintf(cmdname, sizeof(cmdname), "%.253s={", cmd_name);
+	cmdname_found = 0;
+	while ((pos = nxpwifi_config_get_line(fp, line, sizeof(line), &ln))) {
+		if (strcmp(pos, cmdname) == 0) {
+			cmdname_found = 1;
+			snprintf(cmdcode, sizeof(cmdcode), "CmdCode=");
+			cmdcode_found = 0;
+			while ((pos = nxpwifi_config_get_line(
+				    fp, line, sizeof(line), &ln))) {
+				if (strncmp(pos, cmdcode, strlen(cmdcode)) ==
+				    0) {
+					cmdcode_found = 1;
+
+					*hostcmd = a2hex_or_atoi(
+					    pos + strlen(cmdcode));
+
+					nxpwifi_get_hostcmd_data(fp, &ln, buf,
+								 len);
+					break;
+				}
+			}
+			if (!cmdcode_found) {
+				fprintf(stderr,
+					"mlanutl: CmdCode not found in conf "
+					"file\n");
+				return 1;
+			}
+			break;
+		}
+    }
+
+    if (!cmdname_found){
+        fprintf(stderr, "mlanutl: cmdname '%s' is not found in conf file\n",cmd_name);
+        return 1;
+    }
+
+    return 0;
+}
+
+/**
+ *  @brief Process hostcmd command
+ *  @param argc   Number of arguments
+ *  @param argv   A pointer to arguments array
+ *  @return     MLAN_STATUS_SUCCESS--success, otherwise--fail
+ */
+static int process_hostcmd(int argc, char *argv[])
+{
+    unsigned char *buffer = NULL, *raw_buf = NULL;
+    struct eth_priv_cmd *cmd = NULL;
+    struct ifreq ifr;
+    FILE *fp = NULL;
+    FILE *fp_raw = NULL;
+    FILE *fp_dtsi = NULL;
+    char cmdname[256];
+    bool call_ioctl = true;
+    unsigned int buf_len = 0, i, j, k;
+    char *line = NULL, *pos = NULL;
+    int li = 0, blk_count = 0, ob = 0;
+    int ret = 0;
+	char *argv1[NXPWIFI_MAX_ARGC];
+	char edmac_cmd[NXPWIFI_MAX_CMD_NAME_SIZE];
+	char ed_2g_enable[NXPWIFI_MAX_CMD_NAME_SIZE], ed_2g_offset[NXPWIFI_MAX_CMD_NAME_SIZE], ed_5g_enable[NXPWIFI_MAX_CMD_NAME_SIZE], ed_5g_offset[NXPWIFI_MAX_CMD_NAME_SIZE], ed_txq_lock[NXPWIFI_MAX_CMD_NAME_SIZE];
+	struct nxpwifiutl_edmac_cfg *edmac_cfg;
+	uint16_t cmd_len, hostcmd;
+
+    struct cmd_node {
+        char cmd_string[256];
+        struct cmd_node *next;
+    };
+    struct cmd_node *command = NULL, *header = NULL, *new_node = NULL;
+
+    if (argc < 5) {
+        printf("Error: invalid no of arguments\n");
+        printf("Syntax: ./nxpwifiutl mlanX hostcmd <hostcmd.conf> <cmdname>\n");
+        return 1;
+    }
+
+    snprintf(cmdname, sizeof(cmdname),"%s", argv[4]);
+
+    if (!strcmp(cmdname, "generate_raw")) {
+        call_ioctl = false;
+    }
+    if (!call_ioctl && argc != 6) {
+        printf("Error: invalid no of arguments\n");
+        printf("Syntax: ./nxpwifiutl mlanX hostcmd <hostcmd.conf> %s <raw_data_file>\n", cmdname);
+		return 1;
+    }
+
+    fp = fopen(argv[3], "r");
+    if (fp == NULL) {
+        fprintf(stderr, "Cannot open file %s\n", argv[3]);
+		return 1;
+    }
+
+    /* Initialize buffer */
+    buffer = (unsigned char *) malloc(BUFFER_LENGTH);
+    if (!buffer) {
+        printf("ERR:Cannot allocate buffer for command!\n");
+        fclose(fp);
+		return 1;
+    }
+    memset(buffer, 0, BUFFER_LENGTH);
+
+    if (call_ioctl) {
+        if ( 0 != prepare_host_cmd_buffer(fp, cmdname, buffer, &cmd_len, &hostcmd)) {
+            fclose(fp);
+            ret = 1;
+			printf("parse command failed\n");
+            goto done;
+        }
+        fclose(fp);
+    }
+
+	switch (hostcmd) {
+		case NXPWIFI_CMD_ED_CTRL:
+			argv1[1] = argv[1];
+			strcpy(edmac_cmd, "edmac_cfg");
+			argv1[2] = edmac_cmd;
+
+			if (cmd_len == 0) {
+				process_edmac_cfg(3, argv1);
+			} else {
+				edmac_cfg = (struct nxpwifiutl_edmac_cfg *)buffer;
+				sprintf(ed_2g_enable, "0x%x", edmac_cfg->ed_2g_enable);
+				argv1[3] = ed_2g_enable;
+				sprintf(ed_2g_offset, "0x%x", edmac_cfg->ed_2g_offset);
+				argv1[4] = ed_2g_offset;
+				sprintf(ed_5g_enable, "0x%x", edmac_cfg->ed_5g_enable);
+				argv1[5] = ed_5g_enable;
+				sprintf(ed_5g_offset, "0x%x", edmac_cfg->ed_5g_offset);
+				argv1[6] = ed_5g_offset;
+				sprintf(ed_txq_lock, "0x%x", edmac_cfg->ed_txq_lock);
+				argv1[7] = ed_txq_lock;
+				process_edmac_cfg(8, argv1);
+			}
+		break;
+		default:
+		break;
+	}
+done:
+    while (header) {
+        command = header;
+        header = header->next;
+        free(command);
+    }
+    if (line)
+        free(line);
+    if (buffer)
+        free(buffer);
+    if (cmd)
+        free(cmd);
+    return ret;
 }
 
 static void nl80211_cleanup(struct nl80211_state *state)
