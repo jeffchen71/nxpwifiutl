@@ -43,6 +43,7 @@ enum nxpwifi_vendor_commands {
 	NXPWIFI_VENDOR_CMD_CHANNELSWITCH = 6,
 	NXPWIFI_VENDOR_CMD_ANTCFG = 7,
 	NXPWIFI_VENDOR_CMD_EDMAC_CFG = 8,
+	NXPWIFI_VENDOR_CMD_VHT_CFG = 9,
 };
 
 enum nxpwifiutl_attrs {
@@ -72,9 +73,17 @@ enum nxpwifi_edmac_attrs {
 	NXPWIFI_EDMAC_MAX
 };
 
-enum nxpwifi_host_cmds {
-    NXPWIFI_CMD_ED_CTRL = 0x0130
+enum nxpwifi_vht_attrs {
+	NXPWIFI_VHT_BAND = 1,
+	NXPWIFI_VHT_TXRX,
+	NXPWIFI_VHT_BW,
+	NXPWIFI_VHT_CAP,
+	NXPWIFI_VHT_TXMCS,
+	NXPWIFI_VHT_RXMCS,
+	NXPWIFI_VHT_MAX
 };
+
+enum nxpwifi_host_cmds { NXPWIFI_CMD_ED_CTRL = 0x0130 };
 
 struct nl80211_state {
 	struct nl_sock *nl_sock;
@@ -135,6 +144,7 @@ static int process_antenna_cfg(int argc, char *argv[]);
 static int process_edmac_cfg(int argc, char *argv[]);
 static int process_hostcmd(int argc, char *argv[]);
 static char *nxpwifi_config_get_line(FILE *fp, char *str, int size, int *lineno);
+static int process_vht_cfg(int argc, char *argv[]);
 
 struct command_node command_list[] = {
     {"hscfg", process_hscfg},
@@ -143,7 +153,8 @@ struct command_node command_list[] = {
     {"channel_switch", process_channel_switch},
     {"antcfg", process_antenna_cfg},
     {"edmac_cfg", process_edmac_cfg},
-    {"hostcmd", process_hostcmd}
+    {"hostcmd", process_hostcmd},
+    {"vhtcfg", process_vht_cfg}
 };
 
 static struct nla_policy antenna_policy[NXPWIFI_ANTENNA_ATTR_MAX + 1] = {
@@ -290,6 +301,69 @@ static int print_antcfg_response(struct nl_msg *msg, void *arg)
 		printf("antenna mode: %u\n", ant_mode);
 	} else {
 		fprintf(stderr, "antenna mode attribute missing!\n");
+	}
+
+	return NL_OK;
+}
+
+static int print_vhtcfg_response(struct nl_msg *msg, void *arg)
+{
+	struct nlattr *attr;
+	struct genlmsghdr *gnlh = nlmsg_data(nlmsg_hdr(msg));
+	uint32_t *band, *txrx, *bw, *vhtcap, *txmcs, *rxmcs;
+	int len;
+	uint8_t *data;
+	struct nlattr *tb_vendor[NXPWIFI_VHT_MAX + 1];
+
+	attr = nla_find(genlmsg_attrdata(gnlh, 0),
+			genlmsg_attrlen(gnlh, 0),
+			NL80211_ATTR_VENDOR_DATA);
+	if (!attr) {
+		fprintf(stderr, "vendor data attribute missing!\n");
+		return NL_SKIP;
+	}
+
+	nla_parse_nested(tb_vendor, NXPWIFI_VHT_MAX, attr, NULL);
+
+	if (tb_vendor[NXPWIFI_VHT_BAND]) {
+		band = (uint32_t *) nla_data(tb_vendor[NXPWIFI_VHT_BAND]);
+	} else {
+		fprintf(stderr, "band attribute missing!\n");		
+	}
+
+	if (tb_vendor[NXPWIFI_VHT_TXRX]) {
+		txrx = (uint32_t *) nla_data(tb_vendor[NXPWIFI_VHT_TXRX]);
+		fprintf(stdout, "txrx: %d\n", *txrx);
+	} else {
+		fprintf(stderr, "txrx attribute missing!\n");		
+	}
+
+	if (tb_vendor[NXPWIFI_VHT_BW]) {
+		bw = (uint32_t *) nla_data(tb_vendor[NXPWIFI_VHT_BW]);
+		fprintf(stdout, "bw: %d\n", *bw);
+	} else {
+		fprintf(stderr, "bw attribute missing!\n");		
+	}
+
+	if (tb_vendor[NXPWIFI_VHT_CAP]) {
+		vhtcap = (uint32_t *) nla_data(tb_vendor[NXPWIFI_VHT_CAP]);
+		fprintf(stdout, "vhtcap: %d\n", *vhtcap);
+	} else {
+		fprintf(stderr, "vhtcap attribute missing!\n");		
+	}
+
+	if (tb_vendor[NXPWIFI_VHT_TXMCS]) {
+		txmcs = (uint32_t *) nla_data(tb_vendor[NXPWIFI_VHT_TXMCS]);
+		fprintf(stdout, "TX MCS map: %d\n", *txmcs);
+	} else {
+		fprintf(stderr, "txmcs attribute missing!\n");		
+	}
+
+	if (tb_vendor[NXPWIFI_VHT_RXMCS]) {
+		rxmcs = (uint32_t *) nla_data(tb_vendor[NXPWIFI_VHT_RXMCS]);
+		fprintf(stdout, "RX MCS map: %d\n", *rxmcs);
+	} else {
+		fprintf(stderr, "rxmcs attribute missing!\n");		
 	}
 
 	return NL_OK;
@@ -914,7 +988,6 @@ nla_put_failure:
     return 1;
 }
 
-
 /**
  *  @brief Convert char to hex integer
  *
@@ -1313,6 +1386,99 @@ done:
         free(cmd);
     return ret;
 }
+
+static int process_vht_cfg(int argc, char *argv[])
+{
+    __u8 *buffer = NULL;
+	struct nl_msg *msg = NULL;
+	signed long long devidx = 0;
+	unsigned char action;
+	struct nl_cb *cb;
+	int count = 0;
+	unsigned int band = 0, txrx, bw, vhtcap, txmcs, rxmcs;
+	struct nlattr *nested;
+	char *tmp;
+	if (argc < 5) {
+		fprintf(stderr, "Too few arguments\n");
+		return 1;
+	} else if (argc > 9 ) {
+		fprintf(stderr, "Too many arguments\n");
+		return 1;
+	}
+
+	msg = nlmsg_alloc();
+	if (!msg) {
+		fprintf(stderr, "failed to allocate netlink message\n");
+		return 1;
+	}
+
+    if ( NULL == genlmsg_put(msg, 0, 0, nlstate.nl80211_id, 0,
+	            0, NL80211_CMD_VENDOR, 0))
+        goto nla_put_failure;
+
+	devidx = if_nametoindex(argv[1]);
+
+    if (devidx == 0) {
+        if (errno == ENODEV)
+            fprintf(stderr, "%s: %s\n", strerror(errno), argv[1]);
+
+        goto nla_put_failure;
+    }
+
+	NLA_PUT_U32(msg, NL80211_ATTR_IFINDEX, devidx);
+	NLA_PUT_U32(msg, NL80211_ATTR_VENDOR_ID, NXP_OUI);
+	NLA_PUT_U32(msg, NL80211_ATTR_VENDOR_SUBCMD, NXPWIFI_VENDOR_CMD_VHT_CFG);
+
+	nested = nla_nest_start(msg, NL80211_ATTR_VENDOR_DATA);
+	count = sscanf(argv[3], "%d", &band);
+	NLA_PUT_U32(msg, NXPWIFI_VHT_BAND, (uint32_t)band);
+	count = sscanf(argv[4], "%d", &txrx);
+	NLA_PUT_U32(msg, NXPWIFI_VHT_TXRX, (uint32_t)txrx);
+
+	if (argc >= 7) {
+		count = sscanf(argv[5], "%d", &bw);
+		NLA_PUT_U32(msg, NXPWIFI_VHT_BW, (uint32_t)bw);
+		count = sscanf(argv[6], "0x%x", &vhtcap);
+		NLA_PUT_U32(msg, NXPWIFI_VHT_CAP, (uint32_t)vhtcap);
+
+		if (argc == 8) {
+		}
+
+		if (argc == 9) {
+			count = sscanf(argv[7], "0x%x", &txmcs);
+			NLA_PUT_U32(msg, NXPWIFI_VHT_TXMCS, (uint32_t)txmcs);
+			count = sscanf(argv[8], "0x%x", &rxmcs);
+			NLA_PUT_U32(msg, NXPWIFI_VHT_RXMCS, (uint32_t)rxmcs);
+		}
+	} 
+	
+	if (argc == 5) {
+		cb = nl_cb_alloc(NL_CB_DEFAULT);
+		register_handler(print_vhtcfg_response, (void *) false);
+		nl_cb_set(cb, NL_CB_VALID, NL_CB_CUSTOM, valid_handler, NULL);
+	} 
+
+	nla_nest_end(msg, nested);
+
+	count = nl_send_auto(nlstate.nl_sock, msg);
+
+    if (count < 0) {
+        fprintf(stderr, "failed to sent MSG: %s\n", strerror(count));
+		goto nla_put_failure;
+	}
+
+	if (argc == 5)
+		nl_recvmsgs(nlstate.nl_sock, cb);
+
+	nlmsg_free(msg);
+
+	return 0;
+nla_put_failure:
+	nlmsg_free(msg);
+
+    return 1;
+}
+
 
 static void nl80211_cleanup(struct nl80211_state *state)
 {
