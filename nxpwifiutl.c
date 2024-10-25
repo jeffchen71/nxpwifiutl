@@ -21,6 +21,7 @@
 #include <netlink/msg.h>
 #include <netlink/attr.h>
 #include <limits.h>
+#include <endian.h>
 
 #define NXPWIFIUTL_VER "0.1"
 /** Find number of elements */
@@ -44,10 +45,11 @@ enum nxpwifi_vendor_commands {
 	NXPWIFI_VENDOR_CMD_ANTCFG = 7,
 	NXPWIFI_VENDOR_CMD_EDMAC_CFG = 8,
 	NXPWIFI_VENDOR_CMD_VHT_CFG = 9,
+	NXPWIFI_VENDOR_CMD_TXPOWER_LIMIT = 10
 };
 
-enum nxpwifiutl_attrs {
-	NXPWIFI_HSCFG,
+enum nxpwifiutl_rawdata_attrs {
+	NXPWIFI_HSCFG = 1,
 	NXPWIFI_SLEEPPD,
 	NXPWIFI_CLKSYNC_CFG,
 	NXPWIFI_HS_OFFLOAD,
@@ -57,6 +59,7 @@ enum nxpwifiutl_attrs {
 	NXPWIFI_ATTR_CHSWITCH,
 	NXPWIFI_ATTR_ANTENNA_MODE,
 	NXPWIFI_ATTR_SAD_EVAL_TIME,
+	NXPWIFI_ATTR_TXPWR_LIMIT,
 	NXPWIFI_ATTR_MAX
 };
 
@@ -70,6 +73,7 @@ enum nxpwifi_edmac_attrs {
 };
 
 enum nxpwifi_host_cmds {
+	NXPWIFI_CMD_CH_TRPC = 0x00FB,
 	NXPWIFI_CMD_ED_CTRL = 0x0130
 };
 
@@ -83,6 +87,9 @@ enum nxpwifi_vht_attrs {
 	NXPWIFI_VHT_RXMCS,
 	NXPWIFI_VHT_MAX
 };
+
+#define PROPRIETARY_TLV_BASE_ID 0x0100
+#define TLV_TYPE_CHAN_TRPC_CONFIG (PROPRIETARY_TLV_BASE_ID + 137)
 
 struct nl80211_state {
 	struct nl_sock *nl_sock;
@@ -131,6 +138,26 @@ struct nxpwifiutl_edmac_cfg {
 	uint16_t ed_5g_enable;
 	uint16_t ed_5g_offset;
 	uint32_t ed_txq_lock;
+} __attribute__((packed));
+
+struct nxpwifiutl_iehdr
+{
+	uint16_t type;
+	uint16_t len;
+} __attribute__((packed));
+
+struct nxpwifiutl_mod_group
+{
+	uint8_t mod_group;
+	uint8_t power;
+} __attribute__((packed));
+
+struct nxpwifiutl_chtrpc_cfg {
+	struct nxpwifiutl_iehdr hdr;
+	uint16_t start_freq;
+	uint8_t width;
+	uint8_t chan_num;
+	struct nxpwifiutl_mod_group mod_group[];
 } __attribute__((packed));
 
 struct nxpwifiutl_hs_offload hsoffload = {0};
@@ -407,6 +434,68 @@ static int print_edmac_cfg_response(struct nl_msg *msg, void *arg)
 	if (tb_vendor[NXPWIFI_EDMAC_TXQ_LOCK]) {
 		txq_lock = (uint32_t *) nla_data(tb_vendor[NXPWIFI_EDMAC_TXQ_LOCK]);
 		fprintf(stdout, "txq_lock:0x%02x\n", *txq_lock);
+	}
+
+	return NL_OK;
+}
+
+static int print_txpwrlimit_response(struct nl_msg *msg, void *arg)
+{
+	struct nlattr *attr;
+	struct genlmsghdr *gnlh = nlmsg_data(nlmsg_hdr(msg));
+	uint8_t *attr_data;
+	int len;
+	uint8_t *data;
+	struct nlattr *tb_vendor[NXPWIFI_ATTR_MAX + 1];
+	struct nxpwifiutl_chtrpc_cfg *chtrpc_tlv;
+	int left_len, i;
+	int mod_num = 0;
+
+	attr = nla_find(genlmsg_attrdata(gnlh, 0),
+			genlmsg_attrlen(gnlh, 0),
+			NL80211_ATTR_VENDOR_DATA);
+	if (!attr) {
+		fprintf(stderr, "vendor data attribute missing!\n");
+		return NL_SKIP;
+	}
+
+	nla_parse_nested(tb_vendor, NXPWIFI_ATTR_MAX, attr, NULL);
+
+	if (!tb_vendor[NXPWIFI_ATTR_TXPWR_LIMIT]) {
+		fprintf(stderr, "TX Power Limit attribute missing!\n");
+		return NL_SKIP;
+	}
+
+	attr_data = (uint8_t *)nla_data(tb_vendor[NXPWIFI_ATTR_TXPWR_LIMIT]);
+	chtrpc_tlv = (struct nxpwifiutl_chtrpc_cfg *)(attr_data + 4);
+	/* Process result */
+	printf("------------------------------------------------------------------------------------\n");
+	printf("Get txpwrlimit: sub_band=0x%x len=%d\n", *((uint16_t *)attr_data + 1), nla_len(tb_vendor[NXPWIFI_ATTR_TXPWR_LIMIT]));
+	left_len = nla_len(tb_vendor[NXPWIFI_ATTR_TXPWR_LIMIT]) - 4;
+
+	while (left_len >= (int)sizeof(struct nxpwifiutl_iehdr))
+	{
+		switch (le16toh(chtrpc_tlv->hdr.type))
+		{
+		case TLV_TYPE_CHAN_TRPC_CONFIG:
+			printf("StartFreq: %d\n", le16toh(chtrpc_tlv->start_freq));
+			printf("ChanNum:   %d\n", chtrpc_tlv->chan_num);
+			mod_num = (chtrpc_tlv->hdr.len - 4) / sizeof(struct nxpwifiutl_mod_group);
+			printf("Pwr:");
+			for (i = 0; i < mod_num; i++)
+			{
+				if (i == (mod_num - 1))
+					printf("%d,%d", chtrpc_tlv->mod_group[i].mod_group, chtrpc_tlv->mod_group[i].power);
+				else
+					printf("%d,%d,", chtrpc_tlv->mod_group[i].mod_group, chtrpc_tlv->mod_group[i].power);
+			}
+			printf("\n \n");
+			break;
+		default:
+			break;
+		}
+		left_len -= (chtrpc_tlv->hdr.len + sizeof(struct nxpwifiutl_iehdr));
+		chtrpc_tlv = (struct nxpwifiutl_chtrpc_cfg *)((uint8_t *)chtrpc_tlv + chtrpc_tlv->hdr.len + sizeof(struct nxpwifiutl_iehdr));
 	}
 
 	return NL_OK;
@@ -1261,6 +1350,49 @@ static int prepare_host_cmd_buffer(FILE* fp, char *cmd_name, unsigned char *buf,
     return 0;
 }
 
+static int process_chtrpc_cfg(signed long long devidx, unsigned char *buffer, uint16_t cmd_len)
+{
+	struct nl_msg *msg;
+	struct nl_cb *cb;
+
+	msg = nlmsg_alloc();
+	if (!msg)
+	{
+		fprintf(stderr, "failed to allocate netlink message\n");
+		return 1;
+	}
+
+	printf("cmd len %d\n", cmd_len);
+	if (NULL == genlmsg_put(msg, 0, 0, nlstate.nl80211_id, 0,
+				0, NL80211_CMD_VENDOR, 0))
+		goto nla_put_failure;
+
+	NLA_PUT_U32(msg, NL80211_ATTR_IFINDEX, devidx);
+
+	NLA_PUT_U32(msg, NL80211_ATTR_VENDOR_ID, NXP_OUI);
+	NLA_PUT_U32(msg, NL80211_ATTR_VENDOR_SUBCMD, NXPWIFI_VENDOR_CMD_TXPOWER_LIMIT);
+
+	NLA_PUT(msg, NL80211_ATTR_VENDOR_DATA, cmd_len, buffer);
+
+	if (cmd_len == 4)
+	{
+		cb = nl_cb_alloc(NL_CB_DEFAULT);
+		register_handler(print_txpwrlimit_response, (void *)false);
+		nl_cb_set(cb, NL_CB_VALID, NL_CB_CUSTOM, valid_handler, NULL);
+	}
+
+	nl_send_auto(nlstate.nl_sock, msg);
+
+	if (cmd_len == 4)
+		nl_recvmsgs(nlstate.nl_sock, cb);
+
+	return 0;
+nla_put_failure:
+	nlmsg_free(msg);
+
+	return 1;
+}
+
 /**
  *  @brief Process hostcmd command
  *  @param argc   Number of arguments
@@ -1286,6 +1418,7 @@ static int process_hostcmd(int argc, char *argv[])
 	char ed_2g_enable[NXPWIFI_MAX_CMD_NAME_SIZE], ed_2g_offset[NXPWIFI_MAX_CMD_NAME_SIZE], ed_5g_enable[NXPWIFI_MAX_CMD_NAME_SIZE], ed_5g_offset[NXPWIFI_MAX_CMD_NAME_SIZE], ed_txq_lock[NXPWIFI_MAX_CMD_NAME_SIZE];
 	struct nxpwifiutl_edmac_cfg *edmac_cfg;
 	uint16_t cmd_len, hostcmd;
+	signed long long devidx = 0;
 
     struct cmd_node {
         char cmd_string[256];
@@ -1358,6 +1491,19 @@ static int process_hostcmd(int argc, char *argv[])
 				process_edmac_cfg(8, argv1);
 			}
 		break;
+		case NXPWIFI_CMD_CH_TRPC:
+			devidx = if_nametoindex(argv[1]);
+
+			if (devidx == 0)
+			{
+				if (errno == ENODEV)
+					fprintf(stderr, "%s: %s\n", strerror(errno), argv[1]);
+				ret = 1;
+				goto done;
+			}
+
+			process_chtrpc_cfg(devidx, buffer, cmd_len);
+			break;
 		default:
 		break;
 	}
