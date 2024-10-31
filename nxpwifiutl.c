@@ -22,6 +22,7 @@
 #include <netlink/attr.h>
 #include <limits.h>
 #include <endian.h>
+#include <ctype.h>
 
 #define NXPWIFIUTL_VER "0.1"
 /** Find number of elements */
@@ -36,11 +37,13 @@
 #define NXPWIFI_MAX_ARGC 10
 #define NXPWIFI_MAX_CMD_NAME_SIZE 32
 
-enum nxpwifi_vendor_commands {
+enum nxpwifi_vendor_commands
+{
 	NXPWIFI_VENDOR_CMD_HSCFG,
 	NXPWIFI_VENDOR_CMD_SLEEPPD,
 	NXPWIFI_VENDOR_CMD_CLOCKSYNC,
 	NXPWIFI_VENDOR_CMD_HSOFFLOAD,
+	NXPWIFI_VENDOR_CMD_CSI_CFG = 5,
 	NXPWIFI_VENDOR_CMD_CHANNELSWITCH = 6,
 	NXPWIFI_VENDOR_CMD_ANTCFG = 7,
 	NXPWIFI_VENDOR_CMD_EDMAC_CFG = 8,
@@ -160,6 +163,27 @@ struct nxpwifiutl_chtrpc_cfg {
 	struct nxpwifiutl_mod_group mod_group[];
 } __attribute__((packed));
 
+#define CSI_FILTER_MAX 16
+#define CSI_FILTER_SIZE 9
+
+struct nxpwifiutl_csi_filter
+{
+	uint8_t mac_addr[6];
+	uint8_t pkt_type;
+	uint8_t subtype;
+	uint8_t flags;
+} __attribute__((packed));
+
+struct nxpwifiutl_csi_cfg
+{
+	uint16_t csi_enable;
+	uint32_t head_id;
+	uint32_t tail_id;
+	uint8_t csi_filter_cnt;
+	uint8_t chip_id;
+	struct nxpwifiutl_csi_filter csi_filter[CSI_FILTER_MAX];
+} __attribute__((packed));
+
 struct nxpwifiutl_hs_offload hsoffload = {0};
 
 static int process_hscfg(int argc, char *argv[]);
@@ -169,19 +193,20 @@ static int process_channel_switch(int argc, char *argv[]);
 static int process_antenna_cfg(int argc, char *argv[]);
 static int process_edmac_cfg(int argc, char *argv[]);
 static int process_hostcmd(int argc, char *argv[]);
-
+static int process_csi_cfg(int argc, char *argv[]);
 char *nxpwifi_config_get_line(FILE* fp, char *str, int size, int *lineno);
 static int process_vht_cfg(int argc, char *argv[]);
 
 struct command_node command_list[] = {
-    {"hscfg",           process_hscfg},
-    {"sleeppd",         process_sleeppd},
-	{"hsoffload",		process_hsoffload},
-	{"channel_switch",	process_channel_switch},
-	{"antcfg",			process_antenna_cfg},
-	{"edmac_cfg",		process_edmac_cfg},
-	{"hostcmd",			process_hostcmd},
-	{"vhtcfg",		process_vht_cfg}
+    {"hscfg", process_hscfg},
+    {"sleeppd", process_sleeppd},
+    {"hsoffload", process_hsoffload},
+    {"channel_switch", process_channel_switch},
+    {"antcfg", process_antenna_cfg},
+    {"edmac_cfg", process_edmac_cfg},
+    {"hostcmd", process_hostcmd},
+    {"vhtcfg", process_vht_cfg},
+    {"csi", process_csi_cfg}
 };
 
 static char    *usage[] = {
@@ -1614,6 +1639,279 @@ nla_put_failure:
     return 1;
 }
 
+static int hexval(__s32 chr)
+{
+	if (chr >= '0' && chr <= '9')
+		return chr - '0';
+	if (chr >= 'A' && chr <= 'F')
+		return chr - 'A' + 10;
+	if (chr >= 'a' && chr <= 'f')
+		return chr - 'a' + 10;
+
+	return 0;
+}
+
+static __s8 *readCurCmd(__s8 *ptr, __s8 *curCmd)
+{
+	__s32 i = 0;
+#define MAX_CMD_SIZE 64 /**< Max command size */
+
+	while (*ptr != ']' && i < (MAX_CMD_SIZE - 1))
+		curCmd[i++] = *(++ptr);
+
+	if (*ptr != ']')
+		return NULL;
+
+	curCmd[i - 1] = '\0';
+
+	return ++ptr;
+}
+
+static char *convert2hex(char *ptr, __u8 *chr)
+{
+	__u8 val;
+
+	for (val = 0; *ptr && isxdigit((unsigned char)*ptr); ptr++)
+	{
+		val = (val * 16) + hexval(*ptr);
+	}
+
+	*chr = val;
+
+	return ptr;
+}
+
+static int fparse_for_cmd_and_hex(FILE *fp, __u8 *dst, __u8 *cmd)
+{
+	__s8 *ptr;
+	__u8 *dptr;
+	__s8 buf[256], curCmd[64] = {0};
+	__s32 isCurCmd = 0;
+
+	dptr = dst;
+	while (fgets((char *)buf, sizeof(buf), fp))
+	{
+		ptr = buf;
+
+		while (*ptr)
+		{
+			/* skip leading spaces */
+			while (*ptr && isspace((unsigned char)*ptr))
+				ptr++;
+
+			/* skip blank lines and lines beginning with '#' */
+			if (*ptr == '\0' || *ptr == '#')
+				break;
+
+			if (*ptr == '[' && *(ptr + 1) != '/')
+			{
+				ptr = readCurCmd(ptr, curCmd);
+				if (!ptr)
+					return 1;
+
+				if (strcasecmp((char *)curCmd, (char *)cmd)) /* Not equal */
+					isCurCmd = 0;
+				else
+					isCurCmd = 1;
+			}
+
+			/* Ignore the rest if it is not correct cmd */
+			if (!isCurCmd)
+				break;
+
+			if (*ptr == '[' && *(ptr + 1) == '/')
+				return dptr - dst;
+
+			if (isxdigit((unsigned char)*ptr))
+			{
+				ptr = (__s8 *)convert2hex((char *)ptr, dptr++);
+			}
+			else
+			{
+				/* Invalid character on data line */
+				ptr++;
+			}
+		}
+	}
+
+	return 1;
+}
+
+static int process_csi_cfg(int argc, char *argv[])
+{
+	__u8 *buffer = NULL;
+	struct nl_msg *msg = NULL;
+	signed long long devidx = 0;
+	unsigned char action;
+	struct nl_cb *cb;
+	int count = 0;
+	unsigned int band = 0, txrx, bw, vhtcap, txmcs, rxmcs;
+	struct nxpwifiutl_csi_cfg csi_cfg;
+	struct nlattr *nested;
+	char *tmp;
+	__u8 csi_filter[CSI_FILTER_SIZE * CSI_FILTER_MAX];
+	__u8 headID[4];
+	__u8 tailID[4];
+	__u8 chipID = 0;
+	__u8 i;
+	__u16 csi_enable;
+	__u8 csi_filter_cnt;
+	char csi_filter_name[20];
+	int csi_filter_len = 0;
+	int id_len = 0;
+	FILE *fp = NULL;
+	int cmd_header_len = 0, ret = 0;
+
+	char filename[32];
+
+	if ((argc != 4) && (argc != 10))
+	{
+		fprintf(stderr, "Wrong argument number\n");
+		return 1;
+	}
+	
+	msg = nlmsg_alloc();
+
+	if (!msg)
+	{
+		fprintf(stderr, "failed to allocate netlink message\n");
+		return 1;
+	}
+
+	if (NULL == genlmsg_put(msg, 0, 0, nlstate.nl80211_id, 0,
+				0, NL80211_CMD_VENDOR, 0))
+		goto nla_put_failure;
+
+	devidx = if_nametoindex(argv[1]);
+
+	if (devidx == 0)
+	{
+		if (errno == ENODEV)
+			fprintf(stderr, "%s: %s\n", strerror(errno), argv[1]);
+
+		goto nla_put_failure;
+	}
+
+	NLA_PUT_U32(msg, NL80211_ATTR_IFINDEX, devidx);
+	NLA_PUT_U32(msg, NL80211_ATTR_VENDOR_ID, NXP_OUI);
+	NLA_PUT_U32(msg, NL80211_ATTR_VENDOR_SUBCMD, NXPWIFI_VENDOR_CMD_CSI_CFG);
+
+	count = sscanf(argv[3], "%d", &csi_cfg.csi_enable);
+
+	if (count == 0) {
+		csi_cfg.csi_enable = 1;
+		/*copy filename from user */
+		memset(filename, 0, sizeof(filename));
+		strncpy(filename, argv[3], sizeof(filename) - 1);
+		fp = fopen(filename, "r");
+		if (fp == NULL)
+		{
+			perror("fopen");
+			fprintf(stderr, "Cannot open CSI config file %s\n", filename);
+			ret = -EFAULT;
+			goto nla_put_failure;
+		}
+
+		snprintf(csi_filter_name, sizeof(csi_filter_name), "headID");
+		id_len = fparse_for_cmd_and_hex(fp, headID, (__u8 *)csi_filter_name);
+		if (id_len != 4)
+		{
+			printf(" Expected head id size is 4 bytes\n");
+			goto nla_put_failure;
+		}
+		for (i = 0; i < id_len; i++)
+		{
+			printf("%02x ", headID[i]);
+		}
+		printf("\n");
+		memcpy(&csi_cfg.head_id, headID, id_len);
+
+		snprintf(csi_filter_name, sizeof(csi_filter_name), "tailID");
+		id_len = fparse_for_cmd_and_hex(fp, tailID, (__u8 *)csi_filter_name);
+		if (id_len != 4)
+		{
+			printf(" Expected tail id size is 4 bytes\n");
+			goto nla_put_failure;
+		}
+		for (i = 0; i < id_len; i++)
+		{
+			printf("%02x ", tailID[i]);
+		}
+		printf("\n");
+
+		memcpy(&csi_cfg.tail_id, tailID, id_len);
+
+		snprintf(csi_filter_name, sizeof(csi_filter_name), "chipID");
+		id_len = fparse_for_cmd_and_hex(fp, (__u8 *)&chipID, (__u8 *)csi_filter_name);
+		if (id_len != 1)
+		{
+			printf(" Expected chip id size is 1 bytes\n");
+			goto nla_put_failure;
+		}
+		printf("%02x \n", chipID);
+
+		memcpy(&csi_cfg.chip_id, &chipID, id_len);
+
+		/* Parse CSI filters */
+		for (csi_filter_cnt = 0; csi_filter_cnt < CSI_FILTER_MAX; csi_filter_cnt++)
+		{
+			snprintf(csi_filter_name, sizeof(csi_filter_name), "csifilter%d", csi_filter_cnt);
+			csi_filter_len =
+			    fparse_for_cmd_and_hex(fp, &csi_filter[CSI_FILTER_SIZE * csi_filter_cnt], (__u8 *)csi_filter_name);
+
+			printf("Found %d bytes in the csifilter%d section of conf file %s.\n",
+			       csi_filter_len, csi_filter_cnt, filename);
+			if (csi_filter_len != CSI_FILTER_SIZE)
+			{
+				printf(" Expected filter size is %d\n", CSI_FILTER_SIZE);
+				break;
+			}
+			else
+			{
+				for (i = 0; i < CSI_FILTER_SIZE; i++)
+				{
+					printf("%02x ", csi_filter[CSI_FILTER_SIZE * csi_filter_cnt + i]);
+				}
+				printf("\n");
+			}
+		}
+		printf("Found %d CSI filters\n", csi_filter_cnt);
+		csi_cfg.csi_filter_cnt = csi_filter_cnt;
+
+		memcpy(buffer + cmd_header_len, (__u8 *)&csi_enable, sizeof(csi_enable));
+		memcpy(buffer + cmd_header_len + sizeof(csi_enable),
+		       headID, 4 * sizeof(__u8));
+		memcpy(buffer + cmd_header_len + sizeof(csi_enable) + 4 * sizeof(__u8),
+		       tailID, 4 * sizeof(__u8));
+		memcpy(buffer + cmd_header_len + sizeof(csi_enable) + 8 * sizeof(__u8),
+		       (__u8 *)&csi_filter_cnt, sizeof(csi_filter_cnt));
+		memcpy(buffer + cmd_header_len + sizeof(csi_enable) + 8 * sizeof(__u8) + sizeof(csi_filter_cnt),
+		       (__u8 *)&chipID, sizeof(chipID));
+		if (csi_filter_cnt > 0)
+			memcpy(buffer + cmd_header_len + sizeof(csi_enable) + 8 * sizeof(__u8) + sizeof(csi_filter_cnt) + sizeof(chipID),
+			       csi_filter, CSI_FILTER_SIZE * csi_filter_cnt);
+	}
+
+	NLA_PUT(msg, NL80211_ATTR_VENDOR_DATA, sizeof(csi_cfg), &csi_cfg);
+
+	nla_nest_end(msg, nested);
+
+	count = nl_send_auto(nlstate.nl_sock, msg);
+
+	if (count < 0)
+	{
+		fprintf(stderr, "failed to sent MSG: %s\n", strerror(count));
+		goto nla_put_failure;
+	}
+
+	nlmsg_free(msg);
+
+	return 0;
+nla_put_failure:
+	nlmsg_free(msg);
+
+	return 1;
+}
 
 static void nl80211_cleanup(struct nl80211_state *state)
 {
