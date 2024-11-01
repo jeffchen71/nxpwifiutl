@@ -43,12 +43,13 @@ enum nxpwifi_vendor_commands
 	NXPWIFI_VENDOR_CMD_SLEEPPD,
 	NXPWIFI_VENDOR_CMD_CLOCKSYNC,
 	NXPWIFI_VENDOR_CMD_HSOFFLOAD,
-	NXPWIFI_VENDOR_CMD_CSI_CFG = 5,
-	NXPWIFI_VENDOR_CMD_CHANNELSWITCH = 6,
-	NXPWIFI_VENDOR_CMD_ANTCFG = 7,
-	NXPWIFI_VENDOR_CMD_EDMAC_CFG = 8,
-	NXPWIFI_VENDOR_CMD_VHT_CFG = 9,
-	NXPWIFI_VENDOR_CMD_TXPOWER_LIMIT = 10
+	NXPWIFI_VENDOR_CMD_INDRST,
+	NXPWIFI_VENDOR_CMD_CSI_CFG,
+	NXPWIFI_VENDOR_CMD_CHANNELSWITCH,
+	NXPWIFI_VENDOR_CMD_ANTCFG,
+	NXPWIFI_VENDOR_CMD_EDMAC_CFG,
+	NXPWIFI_VENDOR_CMD_VHT_CFG,
+	NXPWIFI_VENDOR_CMD_TXPOWER_LIMIT
 };
 
 enum nxpwifiutl_rawdata_attrs {
@@ -193,6 +194,12 @@ struct nxpwifiutl_gpio_tsf_latch
 	uint16_t width;
 } __attribute__((packed));
 
+struct nxpwifiutl_ireset_cfg
+{
+	uint8_t ir_mode;
+	uint8_t gpio_pin;
+} __attribute__((packed));
+
 struct nxpwifiutl_hs_offload hsoffload = {0};
 
 static int process_hscfg(int argc, char *argv[]);
@@ -206,6 +213,7 @@ static char *nxpwifi_config_get_line(FILE *fp, char *str, int size, int *lineno)
 static int process_vht_cfg(int argc, char *argv[]);
 static int process_csi_cfg(int argc, char *argv[]);
 static int process_clocksync(int argc, char *argv[]);
+static int process_irst(int argc, char *argv[]);
 
 struct command_node command_list[] = {
     {"hscfg", process_hscfg},
@@ -217,7 +225,8 @@ struct command_node command_list[] = {
     {"hostcmd", process_hostcmd},
     {"vhtcfg", process_vht_cfg},
     {"csi", process_csi_cfg},
-    {"clocksync", process_clocksync}
+    {"clocksync", process_clocksync},
+    {"indrstcfg", process_irst}
 };
 
 static struct nla_policy antenna_policy[NXPWIFI_ANTENNA_ATTR_MAX + 1] = {
@@ -2004,6 +2013,85 @@ static int process_clocksync(int argc, char *argv[])
 	clksync_cfg.width = (uint16_t)width;
 
 	NLA_PUT(nested, NL80211_ATTR_VENDOR_DATA, sizeof(clksync_cfg), &clksync_cfg);
+
+	count = nl_send_auto(nlstate.nl_sock, msg);
+
+	if (count < 0)
+	{
+		fprintf(stderr, "failed to sent MSG: %s\n", strerror(count));
+		goto nla_put_failure;
+	}
+
+	nlmsg_free(nested);
+	nlmsg_free(msg);
+
+	return 0;
+nla_put_failure:
+	nlmsg_free(nested);
+	nlmsg_free(msg);
+
+	return 1;
+}
+
+static int process_irst(int argc, char *argv[])
+{
+	__u8 *buffer = NULL;
+	struct nl_msg *msg = NULL, *nested = NULL;
+	signed long long devidx = 0;
+	unsigned char action;
+	struct nl_cb *cb;
+	int mode, pin, count = 0;
+	struct nxpwifiutl_ireset_cfg irst_cfg;
+	struct nlattr *opts = NULL, *currattr;
+	int rem;
+
+	if ((argc > 5) && (argc < 3))
+	{
+		fprintf(stderr, "Wrong argument number\n");
+		return 1;
+	}
+
+	msg = nlmsg_alloc();
+	if (!msg)
+	{
+		fprintf(stderr, "failed to allocate netlink message\n");
+		return 1;
+	}
+
+	nested = nlmsg_alloc();
+	if (!nested)
+	{
+		nlmsg_free(msg);
+		fprintf(stderr, "failed to allocate nested netlink message\n");
+		return 1;
+	}
+
+	if (NULL == genlmsg_put(msg, 0, 0, nlstate.nl80211_id, 0,
+				0, NL80211_CMD_VENDOR, 0))
+		goto nla_put_failure;
+
+	devidx = if_nametoindex(argv[1]);
+
+	if (devidx == 0)
+	{
+		if (errno == ENODEV)
+			fprintf(stderr, "%s: %s\n", strerror(errno), argv[1]);
+
+		goto nla_put_failure;
+	}
+
+	NLA_PUT_U32(msg, NL80211_ATTR_IFINDEX, devidx);
+
+	NLA_PUT_U32(msg, NL80211_ATTR_VENDOR_ID, NXP_OUI);
+	NLA_PUT_U32(msg, NL80211_ATTR_VENDOR_SUBCMD, NXPWIFI_VENDOR_CMD_INDRST);
+
+	count = sscanf(argv[3], "%u", &mode);
+	irst_cfg.ir_mode = (uint8_t)mode;
+
+	count = sscanf(argv[5], "%u", &pin);
+	irst_cfg.gpio_pin = (uint8_t)pin;
+
+	NLA_PUT(nested, NL80211_ATTR_VENDOR_DATA, sizeof(irst_cfg), &irst_cfg);
 
 	count = nl_send_auto(nlstate.nl_sock, msg);
 
