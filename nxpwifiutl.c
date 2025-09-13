@@ -234,13 +234,23 @@ static struct nla_policy antenna_policy[NXPWIFI_ANTENNA_ATTR_MAX + 1] = {
     [NXPWIFI_SAD_EVAL_TIME] = {.type = NLA_U16},
 };
 
-static char    *usage[] = {
-    "Usage: ",
-    "   nxpwifiutl <ifname> <cmd> [...]",
-    "   where",
-    "   ifname : wireless network interface name, such as mlanX or uapX",
-    "   cmd :",
-    "         hscfg",
+static char *usage[] = {
+    "Usage:",
+    "  nxpwifiutl <ifname> <cmd> [args...]",
+    "  where:",
+    "    ifname : wireless network interface name, such as mlanX or uapX",
+    "    cmd     : one of the following commands",
+    "      hscfg          : Host sleep configuration",
+    "      sleeppd        : Sleep period configuration",
+    "      hsoffload      : Auto ARP / Ping / Wake-on-mDNS offload",
+    "      channel_switch : Channel switch configuration",
+    "      antcfg         : Antenna configuration",
+    "      edmac_cfg      : Energy Detect MAC configuration",
+    "      vhtcfg         : VHT (802.11ac) IE configuration",
+    "      csi            : CSI (Channel State Information) configuration",
+    "      clocksync      : GPIO TSF latch configuration",
+    "      indrstcfg      : Independent reset configuration",
+    "      hostcmd        : Send raw hostcmd from config file"
 };
 
 #define PROPRIETARY_TLV_BASE_ID 0x0100
