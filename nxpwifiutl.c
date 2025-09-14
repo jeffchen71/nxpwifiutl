@@ -624,8 +624,10 @@ static int process_hscfg(int argc, char *argv[])
 	
 	nl_send_auto(nlstate.nl_sock, msg);
 
-	if (hscfg.action == 0)
+	if (hscfg.action == 0) {
 		nl_recvmsgs(nlstate.nl_sock, cb);
+		nl_cb_put(cb);
+	}
 
     return 0;
 nla_put_failure:
@@ -690,8 +692,10 @@ static int process_sleeppd(int argc, char *argv[])
 	
 	nl_send_auto(nlstate.nl_sock, msg);
 
-	if (sleepd_cfg.action == 0)
+	if (sleepd_cfg.action == 0) {
 		nl_recvmsgs(nlstate.nl_sock, cb);
+		nl_cb_put(cb);
+	}
 
     return 0;
 nla_put_failure:
@@ -795,6 +799,7 @@ static int process_hsoffload(int argc, char *argv[])
 
 	if (hsoffload.action == 0) {
 		nl_recvmsgs(nlstate.nl_sock, cb);
+		nl_cb_put(cb);
 
 		if (argv[2] != NULL) {
 			printf("Auto-arp is ");
@@ -1031,8 +1036,10 @@ static int process_antenna_cfg(int argc, char *argv[])
 		goto nla_put_failure;
 	}
 
-	if (argc == 3)
+	if (argc == 3) {
 		nl_recvmsgs(nlstate.nl_sock, cb);
+		nl_cb_put(cb);
+	}
 
 	nlmsg_free(nested);
 	nlmsg_free(msg);
@@ -1119,13 +1126,15 @@ static int process_edmac_cfg(int argc, char *argv[])
 
 	count = nl_send_auto(nlstate.nl_sock, msg);
 
-    if (count < 0) {
-        fprintf(stderr, "failed to sent MSG: %s\n", strerror(count));
+	if (count < 0) {
+		fprintf(stderr, "failed to sent MSG: %s\n", strerror(count));
 		goto nla_put_failure;
 	}
 
-	if (argc == 3)
+	if (argc == 3) {
 		nl_recvmsgs(nlstate.nl_sock, cb);
+		nl_cb_put(cb);
+	}
 
 	nlmsg_free(msg);
 
@@ -1432,7 +1441,6 @@ static int process_chtrpc_cfg(signed long long devidx, unsigned char *buffer, ui
 		return 1;
 	}
 
-	printf("cmd len %d\n", cmd_len);
 	if (NULL == genlmsg_put(msg, 0, 0, nlstate.nl80211_id, 0,
 				0, NL80211_CMD_VENDOR, 0))
 		goto nla_put_failure;
@@ -1453,8 +1461,10 @@ static int process_chtrpc_cfg(signed long long devidx, unsigned char *buffer, ui
 
 	nl_send_auto(nlstate.nl_sock, msg);
 
-	if (cmd_len == 4)
+	if (cmd_len == 4) {
 		nl_recvmsgs(nlstate.nl_sock, cb);
+		nl_cb_put(cb);
+	}
 
 	return 0;
 nla_put_failure:
@@ -1667,13 +1677,15 @@ static int process_vht_cfg(int argc, char *argv[])
 
 	count = nl_send_auto(nlstate.nl_sock, msg);
 
-    if (count < 0) {
-        fprintf(stderr, "failed to sent MSG: %s\n", strerror(count));
+	if (count < 0) {
+		fprintf(stderr, "failed to sent MSG: %s\n", strerror(count));
 		goto nla_put_failure;
 	}
 
-	if (argc == 5)
+	if (argc == 5) {
 		nl_recvmsgs(nlstate.nl_sock, cb);
+		nl_cb_put(cb);
+	}
 
 	nlmsg_free(msg);
 
