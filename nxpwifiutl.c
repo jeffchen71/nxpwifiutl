@@ -622,7 +622,7 @@ static int process_hscfg(int argc, char *argv[])
 		sscanf(argv[5], "%d", &hscfg.gap);
 
 	if (argc == 3) {
-		cb = nl_cb_alloc(NL_CB_DEBUG);
+		cb = nl_cb_alloc(NL_CB_DEFAULT);
 		hscfg.action = 0;
 		register_handler(print_hscfg_response, (void *) false);
 		nl_cb_set(cb, NL_CB_VALID, NL_CB_CUSTOM, valid_handler, NULL);
