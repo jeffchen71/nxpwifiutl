@@ -412,6 +412,7 @@ static int print_vhtcfg_response(struct nl_msg *msg, void *arg)
 
 	if (tb_vendor[NXPWIFI_VHT_BAND]) {
 		band = (uint32_t *) nla_data(tb_vendor[NXPWIFI_VHT_BAND]);
+		fprintf(stdout, "band: %d\n", *band);
 	} else {
 		fprintf(stderr, "band attribute missing!\n");		
 	}
@@ -425,28 +426,28 @@ static int print_vhtcfg_response(struct nl_msg *msg, void *arg)
 
 	if (tb_vendor[NXPWIFI_VHT_BW]) {
 		bw = (uint32_t *) nla_data(tb_vendor[NXPWIFI_VHT_BW]);
-		fprintf(stdout, "bw: %d\n", *bw);
+		fprintf(stdout, "bw: %0x\n", *bw);
 	} else {
 		fprintf(stderr, "bw attribute missing!\n");		
 	}
 
 	if (tb_vendor[NXPWIFI_VHT_CAP]) {
 		vhtcap = (uint32_t *) nla_data(tb_vendor[NXPWIFI_VHT_CAP]);
-		fprintf(stdout, "vhtcap: %d\n", *vhtcap);
+		fprintf(stdout, "vhtcap: %0x\n", *vhtcap);
 	} else {
 		fprintf(stderr, "vhtcap attribute missing!\n");		
 	}
 
 	if (tb_vendor[NXPWIFI_VHT_TXMCS]) {
 		txmcs = (uint32_t *) nla_data(tb_vendor[NXPWIFI_VHT_TXMCS]);
-		fprintf(stdout, "TX MCS map: %d\n", *txmcs);
+		fprintf(stdout, "TX MCS map: %0x\n", *txmcs);
 	} else {
 		fprintf(stderr, "txmcs attribute missing!\n");		
 	}
 
 	if (tb_vendor[NXPWIFI_VHT_RXMCS]) {
 		rxmcs = (uint32_t *) nla_data(tb_vendor[NXPWIFI_VHT_RXMCS]);
-		fprintf(stdout, "RX MCS map: %d\n", *rxmcs);
+		fprintf(stdout, "RX MCS map: %0x\n", *rxmcs);
 	} else {
 		fprintf(stderr, "rxmcs attribute missing!\n");		
 	}
