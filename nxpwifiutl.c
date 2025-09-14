@@ -851,7 +851,8 @@ nla_put_failure:
 static int process_channel_switch(int argc, char *argv[])
 {
     __u8 *buffer = NULL;
-	struct nl_msg *msg = NULL, *nested = NULL;
+	struct nl_msg *msg = NULL;
+	struct nlattr *nested = NULL;
 	signed long long devidx = 0;
 	unsigned char action;
 	struct nl_cb *cb;
@@ -878,25 +879,17 @@ static int process_channel_switch(int argc, char *argv[])
 		return 1;
 	}
 
-	nested = nlmsg_alloc();
-	if (!nested) {
-		nlmsg_free(msg);
-		fprintf(stderr, "failed to allocate nested netlink message\n");
-		return 1;
-	}
-
     if ( NULL == genlmsg_put(msg, 0, 0, nlstate.nl80211_id, 0,
 	            0, NL80211_CMD_VENDOR, 0))
         goto nla_put_failure;
 
 	devidx = if_nametoindex(argv[1]);
 
-    if (devidx == 0) {
-        if (errno == ENODEV)
-            fprintf(stderr, "%s: %s\n", strerror(errno), argv[1]);
-
-        goto nla_put_failure;
-    }
+	if (devidx == 0) {
+		if (errno == ENODEV)
+			fprintf(stderr, "%s: %s\n", strerror(errno), argv[1]);
+		goto nla_put_failure;
+	}
 
 	NLA_PUT_U32(msg, NL80211_ATTR_IFINDEX, devidx);
 
@@ -908,7 +901,7 @@ static int process_channel_switch(int argc, char *argv[])
 	count = sscanf(argv[4], "%u", &class);
 	chsw_cfg.new_oper_class = (uint8_t)class;
 	
-    count = sscanf(argv[5], "%u", &channel);
+	count = sscanf(argv[5], "%u", &channel);
 	chsw_cfg.new_channel_num = (uint8_t)channel;
 
 	count = sscanf(argv[6], "%u", &switch_count);
@@ -944,22 +937,25 @@ static int process_channel_switch(int argc, char *argv[])
 		chsw_cfg.bw_retry.num_retry_pkts = (uint8_t)bw_pktno;
 	}
 
-	NLA_PUT(nested, 7, sizeof(chsw_cfg), &chsw_cfg);
-	nla_put_nested(msg, NL80211_ATTR_VENDOR_DATA, nested);
+	nested = nla_nest_start(msg, NL80211_ATTR_VENDOR_DATA);
+	if (!nested)
+		goto nla_put_failure;
+
+	NLA_PUT(msg, NXPWIFI_ATTR_CHSWITCH, sizeof(chsw_cfg), &chsw_cfg);
+
+	nla_nest_end(msg, nested);
 
 	count = nl_send_auto(nlstate.nl_sock, msg);
 
-    if (count < 0) {
-        fprintf(stderr, "failed to sent MSG: %s\n", strerror(count));
+	if (count < 0) {
+		fprintf(stderr, "failed to sent MSG: %s\n", strerror(count));
 		goto nla_put_failure;
 	}
 
-	nlmsg_free(nested);
 	nlmsg_free(msg);
 
 	return 0;
 nla_put_failure:
-	nlmsg_free(nested);
 	nlmsg_free(msg);
 
     return 1;
