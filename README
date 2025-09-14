@@ -1,0 +1,57 @@
+README for nxpwifiutl
+=====================
+
+Overview
+--------
+`nxpwifiutl` is a userspace utility designed to interact with the NXP Wi-Fi driver (`nxpwifi`) via the `nl80211` netlink interface. It supports various vendor-specific commands for configuring and debugging advanced features of NXP IW61x chipsets, such as host sleep, channel switching, antenna configuration, EDMAC, VHT, CSI, clock synchronization, and independent reset.
+
+Environment
+-----------
+- Compatible with Linux kernel versions 6.6.52.
+- Requires nxpwifi.ko and nxpwifi_sdio.ko driver to be loaded.
+- Interface names can be mlan0, uap0.
+
+Usage
+-----
+    nxpwifiutl <ifname> <cmd> [args...]
+
+- `ifname`: Wireless interface name, e.g., `mlan0`, `uap0`
+- `cmd`: One of the supported commands listed below
+- `args`: Optional arguments depending on the command
+
+Supported Commands
+------------------
+| Command         | Description |
+|----------------|-------------|
+| hscfg          | Configure host sleep parameters (conditions, GPIO, gap). |
+| sleeppd        | Configure sleep period for PPS/uAPSD. |
+| hsoffload      | Enable/disable auto ARP, Ping, Wake-on-mDNS offload. |
+| channel_switch | Configure channel switch parameters (oper class, channel, bandwidth). |
+| antcfg         | Configure antenna mode and SAD evaluation time. |
+| edmac_cfg      | Configure Energy Detect MAC (2G/5G offsets, txq lock). |
+| vhtcfg         | Configure VHT (802.11ac) IE (band, txrx, bw, capabilities, MCS map). |
+| csi            | Configure CSI (Channel State Information) collection. |
+| clocksync      | Configure GPIO TSF latch for clock synchronization. |
+| indrstcfg      | Configure independent reset mode and GPIO pin. |
+| hostcmd        | Send raw hostcmd from config file (e.g., edmac_ctrl, txpwrlimit). |
+
+Examples
+--------
+    # Query host sleep configuration
+    nxpwifiutl mlan0 hscfg
+
+    # Set host sleep parameters
+    nxpwifiutl mlan0 hscfg 0x7 5 200
+
+    # Configure channel switch
+    nxpwifiutl uap0 channel_switch 1 115 36 10 4 3
+
+Notes
+-----
+- Most commands support both query and set modes: if only `<cmd>` is provided, it performs a query; if additional arguments are given, it performs a configuration.
+- The `hostcmd` command requires a config file, for example:
+      nxpwifiutl mlan0 hostcmd txpwrlimit_cfg.conf txpwrlimit_2g_cfg_set
+```
+
+---
+
