@@ -245,13 +245,22 @@ static char *usage[] = {
     "      hsoffload      : Auto ARP / Ping / Wake-on-mDNS offload",
     "      channel_switch : Channel switch configuration",
     "      antcfg         : Antenna configuration",
-    "      edmac_cfg      : Energy Detect MAC configuration",
     "      vhtcfg         : VHT (802.11ac) IE configuration",
+    "        Examples:",
+    "          nxpwifiutl mlan0 vhtcfg 2 1",
+    "            -> Get current VHT configuration in 5GHz for STA",
+    "          nxpwifiutl mlan0 vhtcfg 2 2 0 0x000001f0 0xfff5 0xfffa",
+    "            -> Set VHT capabilities with MCS map for STA",
     "      csi            : CSI (Channel State Information) configuration",
     "      clocksync      : GPIO TSF latch configuration",
     "      indrstcfg      : Independent reset configuration",
-    "      hostcmd        : Send raw hostcmd from config file"
-};
+    "      hostcmd        : Send raw hostcmd from config file",
+    "        Examples:",
+    "          edmac configuration: Get current VHT",
+    "          ./nxpwifiutl mlan0 hostcmd ed_mac_ctrl_V2_nw61x.conf",
+    "          ed_mac_ctrl_v2_get",
+    "          ./nxpwifiutl mlan0 hostcmd txpwrlimit_cfg.conf",
+    "          txpwrlimit_2g_cfg_set"};
 
 #define PROPRIETARY_TLV_BASE_ID 0x0100
 #define TLV_TYPE_CHAN_TRPC_CONFIG   (PROPRIETARY_TLV_BASE_ID + 137)
