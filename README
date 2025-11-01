@@ -1,57 +1,123 @@
-README for nxpwifiutl
-=====================
-
+nxpwifiutl README
 Overview
---------
-`nxpwifiutl` is a userspace utility designed to interact with the NXP Wi-Fi driver (`nxpwifi`) via the `nl80211` netlink interface. It supports various vendor-specific commands for configuring and debugging advanced features of NXP IW61x chipsets, such as host sleep, channel switching, antenna configuration, EDMAC, VHT, CSI, clock synchronization, and independent reset.
+nxpwifiutl is a Linux userspace utility for interacting with the NXP Wi-Fi driver (nxpwifi) via the nl80211 netlink interface. It provides vendor-specific commands for configuring and debugging advanced features of NXP IW61x chipsets, including:
+
+Host Sleep
+Channel Switching
+Antenna Configuration
+EDMAC
+VHT (802.11ac)
+CSI (Channel State Information)
+Clock Synchronization
+Independent Reset
+Raw Host Commands
+
 
 Environment
------------
-- Compatible with Linux kernel versions 6.6.52.
-- Requires nxpwifi.ko and nxpwifi_sdio.ko driver to be loaded.
-- Interface names can be mlan0, uap0.
 
-Usage
------
-    nxpwifiutl <ifname> <cmd> [args...]
+Linux kernel: 6.6.52 or compatible
+Requires nxpwifi.ko and nxpwifi_sdio.ko loaded
+Interface names: mlan0, uap0
 
-- `ifname`: Wireless interface name, e.g., `mlan0`, `uap0`
-- `cmd`: One of the supported commands listed below
-- `args`: Optional arguments depending on the command
+
+Basic Usage
+nxpwifiutl <ifname> <cmd> [args...] [options]
+
+
+ifname: Wireless interface name (e.g., mlan0, uap0)
+cmd: One of the supported commands
+args: Command-specific arguments
+Global options:--dump or dump=1: Print outgoing netlink message
+--no-dump or dump=0: Disable message dump (default)
+
 
 Supported Commands
-------------------
-| Command         | Description |
-|----------------|-------------|
-| hscfg          | Configure host sleep parameters (conditions, GPIO, gap). |
-| sleeppd        | Configure sleep period for PPS/uAPSD. |
-| hsoffload      | Enable/disable auto ARP, Ping, Wake-on-mDNS offload. |
-| channel_switch | Configure channel switch parameters (oper class, channel, bandwidth). |
-| antcfg         | Configure antenna mode and SAD evaluation time. |
-| edmac_cfg      | Configure Energy Detect MAC (2G/5G offsets, txq lock). |
-| vhtcfg         | Configure VHT (802.11ac) IE (band, txrx, bw, capabilities, MCS map). |
-| csi            | Configure CSI (Channel State Information) collection. |
-| clocksync      | Configure GPIO TSF latch for clock synchronization. |
-| indrstcfg      | Configure independent reset mode and GPIO pin. |
-| hostcmd        | Send raw hostcmd from config file (e.g., edmac_ctrl, txpwrlimit). |
 
-Examples
---------
-    # Query host sleep configuration
-    nxpwifiutl mlan0 hscfg
+Command	Description
+hscfg	Configure Host Sleep (conditions, GPIO, gap)
+sleeppd	Configure PPS/uAPSD sleep period
+hsoffload	Enable/disable Auto ARP, Ping, Wake-on-mDNS
+channel_switch	Configure channel switch (oper class, channel, bandwidth)
+antcfg	Configure antenna mode and SAD evaluation time
+edmac_cfg	Configure Energy Detect MAC (2G/5G offsets, txq lock)
+vhtcfg	Configure VHT IE (band, txrx, bw, capabilities, MCS map)
+csi	Configure CSI collection (enable/disable or load config file)
+clocksync	Configure GPIO TSF latch for clock synchronization
+indrstcfg	Configure independent reset mode and GPIO pin
+hostcmd	Send raw hostcmd from config file (e.g., edmac_ctrl, txpwrlimit)
 
-    # Set host sleep parameters
-    nxpwifiutl mlan0 hscfg 0x7 5 200
 
-    # Configure channel switch
-    nxpwifiutl uap0 channel_switch 1 115 36 10 4 3
+hsoffload Command Details
+# Query current hsoffload settings
+nxpwifiutl <ifname> hsoffload
+
+Enable or disable features individually:
+autoarp=<0|1> : Enable/disable Auto ARP offload
+autoping=<0|1> : Enable/disable Auto Ping offload
+wakeonmdns=<0|1> : Enable/disable Wake-on-mDNS
+Example:
+nxpwifiutl mlan0 hsoffload autoarp=1 nxpwifiutl mlan0 hsoffload autoping=1 nxpwifiutl mlan0 hsoffload wakeonmdns=1
+Output after query:
+
+Auto-arp is enabled/disabled, Auto-ping is enabled/disabled, Wake-on-mDNS is enabled/disabled.
+
+CSI Command Details
+# Enable or disable CSI
+nxpwifiutl <ifname> csi <0|1>
+# 0 = disable CSI
+# 1 = enable CSI (default or last config)
+
+# Load CSI configuration from file
+nxpwifiutl <ifname> csi <config_file> [--dump]
+
+
+Config file format example (csi.conf):
+[headID]
+11 22 33 44
+
+[tailID]
+aa bb cc dd
+
+[chipID]
+61
+
+[csifilter0]
+00 11 22 33 44 55 08 00 01
+
+headID, tailID: 4 bytes each
+chipID: 1 byte
+csifilterN: Up to 16 filters, each 9 bytes (MAC[6], pkt_type, subtype, flags)
 
 Notes
------
-- Most commands support both query and set modes: if only `<cmd>` is provided, it performs a query; if additional arguments are given, it performs a configuration.
-- The `hostcmd` command requires a config file, for example:
-      nxpwifiutl mlan0 hostcmd txpwrlimit_cfg.conf txpwrlimit_2g_cfg_set
-```
 
----
+Most commands support query mode (only <cmd>) and set mode (with arguments).
+hostcmd requires a config file, e.g.:
+nxpwifiutl mlan0 hostcmd txpwrlimit_cfg.conf txpwrlimit_2g_cfg_set
 
+Build Instructions
+For NXP i.MX Platform (Yocto SDK)
+
+Source Yocto SDK environment:
+source /opt/fsl-imx-xwayland/<version>/environment-setup-armv7at2hf-neon-poky-linux-gnueabi
+
+Compile:
+$CC nxpwifiutl.c -o nxpwifiutl $(pkg-config --cflags --libs libnl-3.0 libnl-genl-3.0)
+
+Using Provided Makefile
+The source directory includes a Makefile, simply run:
+make
+
+Ensure libnl development packages are available in the SDK.
+For x86/x64 PC (Native Linux)
+
+Install dependencies:
+sudo apt-get install libnl-3-dev libnl-genl-3-dev build-essential
+
+Compile:
+gcc nxpwifiutl.c -o nxpwifiutl $(pkg-config --cflags --libs libnl-3.0 libnl-genl-3.0)
+
+Using Provided Makefile
+The source directory includes a Makefile, simply run:
+make
+
+Copy the binary to target board (e.g., /usr/bin/).
