@@ -45,7 +45,8 @@ enum nxpwifi_vendor_commands {
 	NXPWIFI_VENDOR_CMD_ANTCFG,
 	NXPWIFI_VENDOR_CMD_EDMAC_CFG,
 	NXPWIFI_VENDOR_CMD_VHT_CFG,
-	NXPWIFI_VENDOR_CMD_TXPOWER_LIMIT
+	NXPWIFI_VENDOR_CMD_TXPOWER_LIMIT,
+	NXPWIFI_VENDOR_CMD_TWT_CFG
 };
 
 enum nxpwifiutl_rawdata_attrs {
@@ -88,6 +89,16 @@ enum nxpwifi_vht_attrs {
 	NXPWIFI_VHT_RXMCS,
 	NXPWIFI_VHT_MAX
 };
+
+enum nxpwifi_twt_attrs {
+	NXPWIFI_TWT_SETUP = 1,
+	NXPWIFI_TWT_TEARDOWN,
+	NXPWIFI_TWT_INFORMATION,
+	NXPWIFI_TWT_BTWT_AP_CFG_GET,
+	NXPWIFI_TWT_BTWT_AP_CFG_SET,
+	NXPWIFI_TWT_MAX
+};
+
 enum nxpwifi_host_cmds {
 	NXPWIFI_CMD_ED_CTRL = 0x0130,
 	NXPWIFI_CMD_CH_TRPC = 0x00FB
@@ -100,20 +111,24 @@ struct command_node {
 	char *name;
 	int (*handler)(int, char **);
 };
+
 struct nxpwifiutl_hs_cfg {
 	unsigned char action;
 	unsigned int conditions;
 	unsigned int gpio;
 	unsigned int gap;
 } __attribute__((packed));
+
 struct nxpwifiutl_sleeppd_cfg {
 	uint8_t action;
 	uint16_t sleeppd;
 } __attribute__((packed));
+
 struct nxpwifiutl_hs_offload {
 	uint8_t action;
 	uint8_t offload;
 } __attribute__((packed));
+
 struct nxpwifiutl_chan_switch {
 	uint8_t mode;
 	uint8_t chan_switch_mode;
@@ -126,6 +141,7 @@ struct nxpwifiutl_chan_switch {
 		uint8_t num_retry_pkts;
 	} bw_retry;
 } __attribute__((packed));
+
 struct nxpwifiutl_edmac_cfg {
 	uint16_t ed_2g_enable;
 	uint16_t ed_2g_offset;
@@ -133,14 +149,17 @@ struct nxpwifiutl_edmac_cfg {
 	uint16_t ed_5g_offset;
 	uint32_t ed_txq_lock;
 } __attribute__((packed));
+
 struct nxpwifiutl_iehdr {
 	uint16_t type;
 	uint16_t len;
 } __attribute__((packed));
+
 struct nxpwifiutl_mod_group {
 	uint8_t mod_group;
 	uint8_t power;
 } __attribute__((packed));
+
 struct nxpwifiutl_chtrpc_cfg {
 	struct nxpwifiutl_iehdr hdr;
 	uint16_t start_freq;
@@ -148,14 +167,17 @@ struct nxpwifiutl_chtrpc_cfg {
 	uint8_t chan_num;
 	struct nxpwifiutl_mod_group mod_group[];
 } __attribute__((packed));
+
 #define CSI_FILTER_MAX 16
 #define CSI_FILTER_SIZE 9
+
 struct nxpwifiutl_csi_filter {
 	uint8_t mac_addr[6];
 	uint8_t pkt_type;
 	uint8_t subtype;
 	uint8_t flags;
 } __attribute__((packed));
+
 struct nxpwifiutl_csi_cfg {
 	uint16_t csi_enable;
 	uint8_t head_id[4];
@@ -164,6 +186,7 @@ struct nxpwifiutl_csi_cfg {
 	uint8_t chip_id;
 	struct nxpwifiutl_csi_filter csi_filter[CSI_FILTER_MAX];
 } __attribute__((packed));
+
 struct nxpwifiutl_gpio_tsf_latch {
 	uint8_t mode;
 	uint8_t role;
@@ -171,10 +194,71 @@ struct nxpwifiutl_gpio_tsf_latch {
 	uint8_t level;
 	uint16_t width;
 } __attribute__((packed));
+
 struct nxpwifiutl_ireset_cfg {
 	uint8_t ir_mode;
 	uint8_t gpio_pin;
 } __attribute__((packed));
+
+ /* userspace payload (must match vendor side struct) */
+struct nxpwifiutl_twt_setup {
+	uint8_t implicit;
+	uint8_t announced;
+	uint8_t trigger_enabled;
+	uint8_t twt_info_disabled;
+	uint8_t negotiation_type;
+	uint8_t twt_wakeup_duration;
+	uint8_t flow_identifier;
+	uint8_t hard_constraint;
+	uint8_t twt_exponent;
+	uint16_t twt_mantissa;
+	uint8_t twt_request;
+	uint16_t bcn_miss_threshold;
+} __attribute__((packed));
+
+struct nxpwifiutl_twt_teardown {
+	uint8_t negotiation_type;
+	uint8_t flow_identifier;
+	uint8_t teardown_all_twt; /* 1: all, 0: only selected flow */
+} __attribute__((packed));
+
+/* ===== BTWT AP config（userspace mirror driver） ===== */
+#define BTWT_AGREEMENT_MAX 5
+struct nxpwifiutl_btwt_set {
+	uint8_t btwt_id;
+	uint16_t ap_bcast_mantissa; /* LE16 on the wire */
+	uint8_t ap_bcast_exponent;
+	uint8_t nominalwake;
+} __attribute__((packed));
+
+struct nxpwifiutl_twt_information {
+	uint8_t flow_identifier;
+	uint32_t suspend_duration; /* ms; 0 = suspend forever */
+} __attribute__((packed));
+
+struct nxpwifiutl_btwt_ap_config {
+	uint8_t ap_bcast_bet_sta_wait;
+	uint16_t ap_bcast_offset; /* LE16 on the wire */
+	uint8_t bcast_twtli;
+	uint8_t count; /* number of valid entries in btwt_sets */
+} __attribute__((packed));
+
+/* Request for BTWT AP config GET (mirror kernel vendor req) */
+struct nxpwifiutl_btwt_ap_cfg_req {
+	uint8_t ap_bcast_bet_sta_wait;
+	uint16_t ap_bcast_offset; /* LE16 on the wire */
+	uint8_t bcast_twtli;
+	uint8_t count; /* 1..5 */
+} __attribute__((packed));
+
+/* Request for BTWT AP config SET */
+struct nxpwifiutl_btwt_ap_cfg_set {
+	uint8_t ap_bcast_bet_sta_wait;
+	uint16_t ap_bcast_offset; /* LE16 on the wire */
+	uint8_t bcast_twtli;
+	uint8_t count; /* 1..BTWT_AGREEMENT_MAX */
+} __attribute__((packed));
+
 struct nxpwifiutl_hs_offload hsoffload = {0};
 static struct nl80211_state nlstate;
 static void register_handler(int (*handler)(struct nl_msg *, void *),
@@ -182,6 +266,7 @@ static void register_handler(int (*handler)(struct nl_msg *, void *),
 static int valid_handler(struct nl_msg *msg, void *arg);
 static int print_hscfg_response(struct nl_msg *msg, void *arg);
 static int print_sleeppd_response(struct nl_msg *msg, void *arg);
+static int print_btwt_ap_config_response(struct nl_msg *msg, void *arg);
 static void dump_vendor_msg_attrs(struct nl_msg *msg);
 static int process_hscfg(int argc, char *argv[]);
 static int process_sleeppd(int argc, char *argv[]);
@@ -201,6 +286,24 @@ static int process_vht_cfg(int argc, char *argv[]);
 static int process_csi_cfg(int argc, char *argv[]);
 static int process_clocksync(int argc, char *argv[]);
 static int process_irst(int argc, char *argv[]);
+static int process_twt_cfg(int argc, char *argv[]);
+static int process_twt_teardown(int argc, char *argv[]);
+static int process_twt_information(int argc, char *argv[]);
+static int process_twt_conf(int argc, char *argv[]);
+static int send_twt_setup_msg(const char *ifname, const void *setup);
+static int send_twt_teardown_msg(const char *ifname, const void *teardown);
+static int send_twt_information_msg(const char *ifname, const void *info);
+static int send_btwt_ap_config_get_msg(const char *ifname, const void *req);
+static int send_btwt_ap_config_set_msg(const char *ifname, const void *req,
+				       size_t len);
+static int parse_twt_conf(const char *filename,
+			  struct nxpwifiutl_twt_setup *setup,
+			  struct nxpwifiutl_twt_teardown *teardown);
+static int parse_twt_section(const char *filename, const char *section,
+			     struct nxpwifiutl_twt_setup *s,
+			     struct nxpwifiutl_twt_teardown *td,
+			     struct nxpwifiutl_twt_information *inf);
+
 struct command_node command_list[] = {
     {"hscfg", process_hscfg},
     {"sleeppd", process_sleeppd},
@@ -212,11 +315,18 @@ struct command_node command_list[] = {
     {"vhtcfg", process_vht_cfg},
     {"csi", process_csi_cfg},
     {"clocksync", process_clocksync},
-    {"indrstcfg", process_irst}};
+    {"indrstcfg", process_irst},
+    {"twt", process_twt_cfg},
+    {"twt_teardown", process_twt_teardown},
+    {"twt_information", process_twt_information},
+    {"twt_conf", process_twt_conf}
+};
+
 static struct nla_policy antenna_policy[NXPWIFI_ANTENNA_ATTR_MAX + 1] = {
     [NXPWIFI_ANTENNA_MODE] = {.type = NLA_U16},
     [NXPWIFI_SAD_EVAL_TIME] = {.type = NLA_U16},
 };
+
 static char *usage[] = {
     "Usage:",
     " nxpwifiutl <ifname> <cmd> [args...]",
@@ -237,6 +347,22 @@ static char *usage[] = {
     " csi : CSI (Channel State Information) configuration",
     " clocksync : GPIO TSF latch configuration",
     " indrstcfg : Independent reset configuration",
+    " twt : 802.11ax TWT Setup (12 params)",
+    "   nxpwifiutl <ifname> twt <implicit> <announced> <trigger_enabled> "
+    "<twt_info_disabled> "
+    "<negotiation_type> <twt_wakeup_duration> <flow_identifier> "
+    "<hard_constraint> <twt_exponent> "
+    "<twt_mantissa> <twt_request> <bcn_miss_threshold>",
+    "   or from conf section:",
+    "   nxpwifiutl <ifname> twt <conf_file> "
+     "<twt_setup|twt_teardown|twt_information>",
+    "     e.g. nxpwifiutl mlan0 twt twt.conf twt_setup",
+    "          nxpwifiutl mlan0 twt twt.conf twt_teardown",
+    "          nxpwifiutl mlan0 twt twt.conf twt_information",
+    " twt_teardown : 802.11ax TWT Teardown",
+    "   nxpwifiutl <ifname> twt_teardown <negotiation_type> <flow_id> "
+    "<teardown_all>",
+    " twt_conf : load TWT setup/teardown from conf file",
     "",
     " CSI command usage:",
     "   nxpwifiutl <ifname> csi <0|1>",
@@ -665,6 +791,102 @@ static int print_txpwrlimit_response(struct nl_msg *msg, void *arg)
 	}
 	return NL_OK;
 }
+
+static int send_twt_information_msg(const char *ifname, const void *info)
+{
+	struct nl_msg *msg = nlmsg_alloc();
+	struct nlattr *nested;
+	int ifindex, sent, ack;
+	if (!msg)
+	{
+		fprintf(stderr, "alloc netlink msg failed\n");
+		return 1;
+	}
+	genlmsg_put(msg, 0, 0, nlstate.nl80211_id, 0, 0, NL80211_CMD_VENDOR,
+		     0);
+	ifindex = if_nametoindex(ifname);
+	if (ifindex == 0)
+	{
+		fprintf(stderr, "%s: %s\n", strerror(errno), ifname);
+		nlmsg_free(msg);
+		return 1;
+	}
+	NLA_PUT_U32(msg, NL80211_ATTR_IFINDEX, ifindex);
+	NLA_PUT_U32(msg, NL80211_ATTR_VENDOR_ID, NXP_OUI);
+	NLA_PUT_U32(msg, NL80211_ATTR_VENDOR_SUBCMD,
+		     NXPWIFI_VENDOR_CMD_TWT_CFG);
+	nested = nla_nest_start(msg, NL80211_ATTR_VENDOR_DATA);
+	if (!nested)
+		goto nla_put_failure;
+	NLA_PUT(msg, NXPWIFI_TWT_INFORMATION,
+		 +sizeof(struct nxpwifiutl_twt_information), info);
+	nla_nest_end(msg, nested);
+	sent = send_msg(msg);
+	if (sent < 0)
+	{
+		fprintf(stderr, "send twt information failed: %s\n",
+			strerror(sent));
+		goto nla_put_failure;
+	}
+	ack = nl_wait_for_ack(nlstate.nl_sock);
+	if (ack < 0)
+	{
+		fprintf(stderr, "twt information ack error: %s\n",
+			nl_geterror(ack));
+		goto nla_put_failure;
+	}
+	nlmsg_free(msg);
+	return 0;
+nla_put_failure :
+	nlmsg_free(msg);
+	return 1;
+}
+
+/* ===== 解析 & 列印 BTWT AP config 的回覆 ===== */
+static int print_btwt_ap_config_response(struct nl_msg *msg, void *arg)
+{
+	struct genlmsghdr *gnlh = nlmsg_data(nlmsg_hdr(msg));
+	struct nlattr *attr;
+	uint8_t *data;
+	int len, i, n;
+	struct nxpwifiutl_btwt_ap_config cfg;
+	attr = nla_find(genlmsg_attrdata(gnlh, 0), +genlmsg_attrlen(gnlh, 0),
+			NL80211_ATTR_VENDOR_DATA);
+	if (!attr) {
+		fprintf(stderr, "vendor data attribute missing!\n");
+		return NL_SKIP;
+	}
+	data = (uint8_t *)nla_data(attr);
+	len = nla_len(attr);
+	if (len < (int)sizeof(cfg)) {
+		fprintf(stderr,
+			"BTWT AP config payload too short: %d (need >= %zu)\n",
+			len, sizeof(cfg));
+		return NL_SKIP;
+	}
+	/* 直接複製一份到本地端結構，便於端序轉換與列印 */
+	memcpy(&cfg, data, sizeof(cfg));
+	printf("BTWT AP config:\n");
+	printf("  ap_bcast_bet_sta_wait: %u\n", cfg.ap_bcast_bet_sta_wait);
+	printf("  Ap_Bcast_Offset:       %u\n", le16toh(cfg.ap_bcast_offset));
+	printf("  bcastTWTLI:            %u\n", cfg.bcast_twtli);
+	printf("  count:                 %u\n", cfg.count);
+	n = cfg.count;
+	if (n > BTWT_AGREEMENT_MAX)
+		n = BTWT_AGREEMENT_MAX;
+	for (i = 0; i < n; i++) {
+		const struct nxpwifiutl_btwt_set *s =
+		    (struct nxpwifiutl_btwt_set *)&cfg + 1;
+		printf("  [Set %d]\n", i);
+		printf("    btwtId:            %u\n", s->btwt_id);
+		printf("    Ap_Bcast_Mantissa: %u\n",
+		       le16toh(s->ap_bcast_mantissa));
+		printf("    Ap_Bcast_Exponent: %u\n", s->ap_bcast_exponent);
+		printf("    nominalwake:       %u\n", s->nominalwake);
+	}
+	return NL_OK;
+}
+
 /**
  * @brief Process hscfg configuration
  * @param argc Number of arguments
@@ -1972,6 +2194,822 @@ nla_put_failure:
 	nlmsg_free(msg);
 	return 1;
 }
+
+static int parse_twt_section(const char *filename, const char *section,
+			     struct nxpwifiutl_twt_setup *s,
+			     struct nxpwifiutl_twt_teardown *td,
+			     struct nxpwifiutl_twt_information *inf)
+{
+	FILE *fp = fopen(filename, "r");
+	char line[256];
+	int in = 0; /* 0: none, 1: in desired section */
+
+	if (!fp)
+	{
+		perror("fopen");
+		return -1;
+	}
+
+	/* Section header string, e.g., "twt_setup={" matches the conf format */
+	char header[64];
+	snprintf(header, sizeof(header), "%s={", section);
+
+	while (fgets(line, sizeof(line), fp))
+	{
+		if (!in)
+		{
+			if (strstr(line, header))
+			{
+				in = 1;
+				continue;
+			}
+			continue;
+		}
+
+		if (strchr(line, '}'))
+		{
+			in = 0;
+			break;
+		}
+
+		char *hash = strchr(line, '#');
+
+		if (hash)
+			*hash = '\0';
+		char key[64];
+		unsigned int val;
+
+		if (sscanf(line, " %63[^=]=%u", key, &val) == 2)
+		{
+			if (!strcasecmp(section, "twt_setup"))
+			{
+				if (!s)
+					continue;
+
+				if (!strcasecmp(key, "Implicit"))
+					s->implicit = val;
+				else if (!strcasecmp(key, "Announced"))
+					s->announced = val;
+				else if (!strcasecmp(key, "TriggerEnabled"))
+					s->trigger_enabled = val;
+				else if (!strcasecmp(key, "TWTInformationDisabled"))
+				     s->twt_info_disabled = val;
+				else if (!strcasecmp(key, "NegotiationType"))
+				     s->negotiation_type = val;
+				else if (!strcasecmp(key, "TWTWakeupDuration"))
+				     s->twt_wakeup_duration = val;
+				else if (!strcasecmp(key, "FlowIdentifier"))
+				     s->flow_identifier = val;
+				else if (!strcasecmp(key, "HardConstraint"))
+				     s->hard_constraint = val;
+				else if (!strcasecmp(key, "TWTExponent"))
+				     s->twt_exponent = val;
+				else if (!strcasecmp(key, "TWTMantissa"))
+				     s->twt_mantissa = val;
+				else if (!strcasecmp(key, "TWTRequestType"))
+				     s->twt_request = val;
+				/* If BCN_MISS / bcn_miss_threshold is not
+				 * present in the conf, keep it as 0 */
+			}
+			else if (!strcasecmp(section, "twt_teardown"))
+			{
+				if (!td)
+					continue;
+				if (!strcasecmp(key, "FlowIdentifier"))
+					td->flow_identifier = val;
+				else if (!strcasecmp(key, "NegotiationType"))
+					td->negotiation_type = val;
+				else if (!strcasecmp(key, "TearDownAllTWT"))
+					td->teardown_all_twt = val;
+			}
+			else if (!strcasecmp(section, "twt_information"))
+			{
+				if (!inf)
+					continue;
+				if (!strcasecmp(key, "FlowIdentifier"))
+					inf->flow_identifier = val;
+				else if (!strcasecmp(key, "SuspendDuration"))
+					inf->suspend_duration = val;
+			}
+		}
+	}
+
+	fclose(fp);
+	return 0;
+}
+
+static int send_btwt_ap_config_get_msg(const char *ifname, const void *req)
+{
+	struct nl_msg *msg = nlmsg_alloc();
+	struct nl_cb *cb = NULL;
+	int ifindex, sent, ack;
+
+	if (!msg)
+	{
+		fprintf(stderr, "alloc netlink msg failed\n");
+		return 1;
+	}
+	genlmsg_put(msg, 0, 0, nlstate.nl80211_id, 0, 0, NL80211_CMD_VENDOR,
+		     0);
+	ifindex = if_nametoindex(ifname);
+	if (ifindex == 0)
+	{
+		fprintf(stderr, "%s: %s\n", strerror(errno), ifname);
+		nlmsg_free(msg);
+		return 1;
+	}
+	NLA_PUT_U32(msg, NL80211_ATTR_IFINDEX, ifindex);
+	NLA_PUT_U32(msg, NL80211_ATTR_VENDOR_ID, NXP_OUI);
+	NLA_PUT_U32(msg, NL80211_ATTR_VENDOR_SUBCMD,
+		     NXPWIFI_VENDOR_CMD_TWT_CFG);
+	/* Put request as vendor binary attr (no nested) */
+	NLA_PUT(msg, NXPWIFI_TWT_BTWT_AP_CFG_GET,
+		sizeof(struct nxpwifiutl_btwt_ap_cfg_req), req);
+	/* Send and wait for reply to print */
+	cb = nl_cb_alloc(NL_CB_DEFAULT);
+	if (!cb)
+	{
+		nlmsg_free(msg);
+		return 1;
+	}
+	register_handler(print_btwt_ap_config_response, (void *)false);
+	nl_cb_set(cb, NL_CB_VALID, NL_CB_CUSTOM, valid_handler, NULL);
+	sent = send_msg(msg);
+	if (sent < 0)
+	{
+		fprintf(stderr, "send btwt ap cfg get failed: %s\n",
+			strerror(sent));
+		goto nla_put_failure;
+	}
+	nl_recvmsgs(nlstate.nl_sock, cb);
+	nl_cb_put(cb);
+	nlmsg_free(msg);
+	return 0;
+nla_put_failure :
+	if (cb)
+		nl_cb_put(cb);
+	nlmsg_free(msg);
+	return 1;
+}
+
+static int process_twt_cfg(int argc, char *argv[])
+{
+	struct nl_msg *msg = NULL;
+	struct nlattr *nested = NULL;
+	signed long long devidx = 0;
+	struct nxpwifiutl_twt_setup setup = {0};
+	int count;
+
+	/* New mode: nxpwifiutl <ifname> twt <conf_file> <section> */
+	if (argc == 5)
+	{
+		const char *conf = argv[3];
+		const char *sec = argv[4];
+		struct nxpwifiutl_twt_setup s = {0};
+		struct nxpwifiutl_twt_teardown td = {0};
+		struct nxpwifiutl_twt_information inf = {0};
+
+		if (!strcasecmp(sec, "twt_setup"))
+		{
+			if (parse_twt_section(conf, sec, &s, NULL, NULL) < 0)
+				return 1;
+			return send_twt_setup_msg(argv[1], &s);
+		}
+		else if (!strcasecmp(sec, "twt_teardown"))
+		{
+			if (parse_twt_section(conf, sec, NULL, &td, NULL) < 0)
+				return 1;
+			return send_twt_teardown_msg(argv[1], &td);
+		}
+		else if (!strcasecmp(sec, "twt_information"))
+		{
+			if (parse_twt_section(conf, sec, NULL, NULL, &inf) < 0)
+				return 1;
+			return send_twt_information_msg(argv[1], &inf);
+		} else if (!strcasecmp(sec, "btwt_AP_config_get"))
+		{
+			/* Parse request, then GET and print */
+			struct nxpwifiutl_btwt_ap_cfg_req rq = {0};
+			/* Reuse the section parser to fetch 4 request keys */
+			FILE *fp = fopen(conf, "r");
+			char line[256];
+			int in = 0;
+			if (!fp) {
+				perror("fopen");
+				return 1;
+			}
+			while (fgets(line, sizeof(line), fp)) {
+				if (!in) {
+					if (strstr(line, "btwt_AP_config_get={"))
+					{
+						in = 1;
+						continue;
+					}
+					continue;
+				}
+				if (strchr(line, '}')) {
+					in = 0;
+					break;
+				}
+				char *hash = strchr(line, '#');
+				if (hash)
+					*hash = '\0';
+				char key[64];
+				unsigned int val;
+				if (sscanf(line, " %63[^=]=%u", key, &val) ==
+				    2) {
+					if (!strcasecmp(
+						key, "ap_bcast_bet_sta_wait"))
+						rq.ap_bcast_bet_sta_wait =
+						    (uint8_t)val;
+					else if (!strcasecmp(key,
+							     "Ap_Bcast_Offset"))
+						rq.ap_bcast_offset =
+						    htole16((uint16_t)val);
+					else if (!strcasecmp(key, "bcastTWTLI"))
+						rq.bcast_twtli = (uint8_t)val;
+					else if (!strcasecmp(key, "count"))
+						rq.count = (uint8_t)val;
+				}
+			}
+			fclose(fp);
+			/* Clamp count to [1..BTWT_AGREEMENT_MAX] if provided */
+			if (rq.count == 0)
+				rq.count = BTWT_AGREEMENT_MAX;
+			if (rq.count > BTWT_AGREEMENT_MAX)
+				rq.count = BTWT_AGREEMENT_MAX;
+			return send_btwt_ap_config_get_msg(argv[1], &rq);
+		} else if (!strcasecmp(sec, "btwt_AP_config_set")) {
+			/* Parse SET section and send */
+			struct nxpwifiutl_btwt_ap_cfg_set hdr = {0};
+			struct nxpwifiutl_btwt_set sets[BTWT_AGREEMENT_MAX] = {0};
+			uint8_t valid = 0;
+
+			FILE *fp = fopen(conf, "r");
+			char line[256];
+			int in = 0;
+			if (!fp)
+			{
+				perror("fopen");
+				return 1;
+			}
+			while (fgets(line, sizeof(line), fp))
+			{
+				if (!in)
+				{
+					if (strstr(line,
+						   "btwt_AP_config_set={"))
+					{
+						in = 1;
+						continue;
+					}
+					continue;
+				}
+				if (strchr(line, '}'))
+				{
+					in = 0;
+					break;
+				}
+				char *hash = strchr(line, '#');
+				if (hash)
+					*hash = '\0';
+				char key[64];
+				unsigned int val;
+				if (sscanf(line, " %63[^=]=%u", key, &val) ==
+				    2)
+				{
+					if (!strcasecmp(
+							key, "ap_bcast_bet_sta_wait"))
+						hdr.ap_bcast_bet_sta_wait = (uint8_t)val;
+					else if (!strcasecmp(key, "Ap_Bcast_Offset"))
+						hdr.ap_bcast_offset =
+						    htole16((uint16_t)val);
+					else if (!strcasecmp(key,
+							      "bcastTWTLI"))
+						hdr.bcast_twtli = (uint8_t)val;
+					else if (!strcasecmp(key, "count"))
+						hdr.count = (uint8_t)val;
+					else
+					{
+						/* Per-set keys: btwtIdN /
+						    Ap_Bcast_MantissaN /
+						    Ap_Bcast_ExponentN /
+						    nominalwakeN */
+						    int idx = -1;
+						if (!strncmp(key, "btwtId", 6))
+						    idx = atoi(key + 6);
+						else if (!strncmp(key, "Ap_Bcast_Mantissa", 16))
+							idx = atoi(key + 17);
+						else if (!strncmp(key, "Ap_Bcast_Exponent", 16))
+							idx = atoi(key + 17);
+						else if (!strncmp(key, "nominalwake", 11))
+							idx = atoi(key + 11);
+						printf("idx %d\n", idx);
+						if (idx >= 0 &&
+						    idx < BTWT_AGREEMENT_MAX) {
+							if (!strncmp(key, "btwtId", 6))
+								sets[idx].btwt_id = (uint8_t)val;
+							else if (!strncmp(key, "Ap_Bcast_Mantissa", 16))
+								sets[idx].ap_bcast_mantissa =
+								    htole16((uint16_t)val);
+							else if (!strncmp(key, "Ap_Bcast_Exponent", 16))
+								sets[idx].ap_bcast_exponent =
+								    (uint8_t)val;
+							else if (!strncmp(key, "nominalwake", 11))
+								sets[idx].nominalwake =
+								    (uint8_t)val;
+						}
+					}
+				}
+			}
+			fclose(fp);
+
+			/* 計算有效組數（exponent 或 mantissa 有填就視為有效）
+			 */
+			for (int i = 0; i < BTWT_AGREEMENT_MAX; i++) {
+				if (sets[i].ap_bcast_exponent ||
+				    sets[i].ap_bcast_mantissa) {
+					/* （可選）做範圍 clamp：exponent
+					 * 10~26，nominalwake 64~255 */
+					if (sets[i].ap_bcast_exponent < 10)
+						sets[i].ap_bcast_exponent = 10;
+					if (sets[i].ap_bcast_exponent > 26)
+						sets[i].ap_bcast_exponent = 26;
+					if (sets[i].nominalwake < 64)
+						sets[i].nominalwake = 64;
+					valid++;
+				}
+			}
+
+			/* Clamp count and send */
+			if (hdr.count == 0 || hdr.count > valid)
+				hdr.count = valid;
+
+			if (hdr.count < 2)
+			{
+				fprintf(stderr,
+					"Invalid btwt_AP_config_set: need at "
+					"least 2 sets (count=%u, valid=%u)\n",
+					hdr.count, valid);
+				return 1;
+			}
+
+			/* 動態組合：Header + count 個 set */
+			size_t payload_len = sizeof(hdr) + hdr.count *
+				sizeof(struct nxpwifiutl_btwt_set);
+			uint8_t *payload = calloc(1, payload_len);
+			if (!payload)
+			{
+				perror("calloc");
+				return 1;
+			}
+			memcpy(payload, &hdr, sizeof(hdr));
+			memcpy(payload + sizeof(hdr), sets,
+				hdr.count * sizeof(sets[0]));
+			int rc = send_btwt_ap_config_set_msg(argv[1], payload,
+							      payload_len);
+			free(payload);
+			return rc;
+		} else {
+			fprintf(stderr,
+				"Unknown section '%s'. "
+				"Expect one of: "
+				"twt_setup | twt_teardown "
+				"| twt_information | "
+				"btwt_AP_config_get | btwt_AP_config_set\n",
+				sec);
+			return 1;
+		}
+	}
+
+	/* Old mode: 12 parameters (setup only) */
+	if (argc != 15)
+	{
+		fprintf(stderr,
+			"Usage:\n"
+			     "  %s <ifname> twt <implicit> <announced> "
+			     "<trigger_enabled> <twt_info_disabled> "
+			     "<negotiation_type> <twt_wakeup_duration> "
+			     "<flow_identifier> "
+			     "<hard_constraint> <twt_exponent> <twt_mantissa> "
+			     "<twt_request> <bcn_miss_threshold>\n"
+			     "or\n"
+			     "  %s <ifname> twt <conf_file> "
+			     "<twt_setup|twt_teardown|twt_information>\n",
+			argv[0], argv[0]);
+		return 1;
+	}
+
+	msg = nlmsg_alloc();
+	if (!msg)
+	{
+		fprintf(stderr, "failed to allocate netlink message\n");
+		return 1;
+	}
+	if (NULL == genlmsg_put(msg, 0, 0, nlstate.nl80211_id, 0, 0,
+				NL80211_CMD_VENDOR, 0))
+	    goto nla_put_failure;
+	devidx = if_nametoindex(argv[1]);
+	if (devidx == 0)
+	{
+		if (errno == ENODEV)
+		    fprintf(stderr, "%s: %s\n", strerror(errno), argv[1]);
+		goto nla_put_failure;
+	}
+	NLA_PUT_U32(msg, NL80211_ATTR_IFINDEX, devidx);
+	NLA_PUT_U32(msg, NL80211_ATTR_VENDOR_ID, NXP_OUI);
+	NLA_PUT_U32(msg, NL80211_ATTR_VENDOR_SUBCMD,
+		    NXPWIFI_VENDOR_CMD_TWT_CFG);
+
+	setup.implicit = (uint8_t)atoi(argv[3]);
+	setup.announced = (uint8_t)atoi(argv[4]);
+	setup.trigger_enabled = (uint8_t)atoi(argv[5]);
+	setup.twt_info_disabled = (uint8_t)atoi(argv[6]);
+	setup.negotiation_type = (uint8_t)atoi(argv[7]);
+	setup.twt_wakeup_duration = (uint8_t)atoi(argv[8]);
+	setup.flow_identifier = (uint8_t)atoi(argv[9]);
+	setup.hard_constraint = (uint8_t)atoi(argv[10]);
+	setup.twt_exponent = (uint8_t)atoi(argv[11]);
+	setup.twt_mantissa = (uint16_t)atoi(argv[12]);
+	setup.twt_request = (uint8_t)atoi(argv[13]);
+	setup.bcn_miss_threshold = (uint16_t)atoi(argv[14]);
+	nested = nla_nest_start(msg, NL80211_ATTR_VENDOR_DATA);
+
+	if (!nested)
+		goto nla_put_failure;
+	NLA_PUT(msg, NXPWIFI_TWT_SETUP, sizeof(setup), &setup);
+	nla_nest_end(msg, nested);
+
+	if (send_msg(msg) < 0) {
+		fprintf(stderr, "Failed to send TWT setup\n");
+		goto nla_put_failure;
+	}
+
+	if (nl_wait_for_ack(nlstate.nl_sock) < 0) {
+		fprintf(stderr, "TWT setup ack error\n");
+		goto nla_put_failure;
+	}
+	nlmsg_free(msg);
+	return 0;
+
+nla_put_failure :
+	nlmsg_free(msg);
+	return 1;
+}
+
+static int parse_twt_conf(const char *filename,
+			  struct nxpwifiutl_twt_setup *setup,
+			  struct nxpwifiutl_twt_teardown *teardown)
+{
+	FILE *fp = fopen(filename, "r");
+	if (!fp) {
+		perror("fopen");
+		return -1;
+	}
+	char line[256];
+	int in_setup = 0, in_teardown = 0;
+	while (fgets(line, sizeof(line), fp)) {
+		if (strstr(line, "twt_setup={")) {
+			in_setup = 1;
+			continue;
+		}
+		if (strstr(line, "twt_teardown={")) {
+			in_teardown = 1;
+			continue;
+		}
+		if (strchr(line, '}')) {
+			in_setup = 0;
+			in_teardown = 0;
+			continue;
+		}
+
+		char key[64];
+		unsigned int val;
+		if (sscanf(line, "%63[^=]=%u", key, &val) == 2) {
+			if (in_setup) {
+				if (!strcasecmp(key, "Implicit"))
+					setup->implicit = val;
+				else if (!strcasecmp(key, "Announced"))
+					setup->announced = val;
+				else if (!strcasecmp(key, "TriggerEnabled"))
+					setup->trigger_enabled = val;
+				else if (!strcasecmp(key,
+						     "TWTInformationDisabled"))
+					setup->twt_info_disabled = val;
+				else if (!strcasecmp(key, "NegotiationType"))
+					setup->negotiation_type = val;
+				else if (!strcasecmp(key, "TWTWakeupDuration"))
+					setup->twt_wakeup_duration = val;
+				else if (!strcasecmp(key, "FlowIdentifier"))
+					setup->flow_identifier = val;
+				else if (!strcasecmp(key, "HardConstraint"))
+					setup->hard_constraint = val;
+				else if (!strcasecmp(key, "TWTExponent"))
+					setup->twt_exponent = val;
+				else if (!strcasecmp(key, "TWTMantissa"))
+					setup->twt_mantissa = val;
+				else if (!strcasecmp(key, "TWTRequestType"))
+					setup->twt_request = val;
+			} else if (in_teardown) {
+				if (!strcasecmp(key, "FlowIdentifier"))
+					teardown->flow_identifier = val;
+				else if (!strcasecmp(key, "NegotiationType"))
+					teardown->negotiation_type = val;
+				else if (!strcasecmp(key, "TearDownAllTWT"))
+					teardown->teardown_all_twt = val;
+			}
+		}
+	}
+	fclose(fp);
+	return 0;
+}
+
+/* ===== CLI: twt_information (2 args) =====
+ + * nxpwifiutl <ifname> twt_information <flow_id> <suspend_ms>
+ + */
+static int process_twt_information(int argc, char *argv[])
+{
+	if (argc != 6 && argc != 5)
+	{
+		fprintf(stderr,
+			"Usage:\n  %s <ifname> twt_information <flow_id> "
+			  "<suspend_ms>\n",
+			argv[0]);
+		return 1;
+	}
+	struct nxpwifiutl_twt_information info = {0};
+	info.flow_identifier = (uint8_t)atoi(argv[3]);
+	info.suspend_duration = (uint32_t)atoi(argv[4]);
+	return send_twt_information_msg(argv[1], &info);
+}
+
+static int process_twt_teardown(int argc, char *argv[])
+{
+	struct nl_msg *msg = NULL;
+	struct nlattr *nested = NULL;
+	signed long long devidx = 0;
+	struct nxpwifiutl_twt_teardown td = {0};
+	/* nxpwifiutl <ifname> twt_teardown <negotiation_type> <flow_id>
+	   <teardown_all> */
+
+	if (argc != 6)
+	{
+		fprintf(stderr,
+			"Usage:\n"
+			"  %s <ifname> twt_teardown <negotiation_type> "
+			"<flow_id> <teardown_all>\n"
+			"    negotiation_type: 0..3 (per spec / FW def)\n"
+			"    flow_id: 0..7; ignored when teardown_all=1\n"
+			"    teardown_all: 0|1\n",
+			argv[0]);
+		return 1;
+	}
+
+	msg = nlmsg_alloc();
+
+	if (!msg)
+	{
+		fprintf(stderr, "failed to allocate netlink message\n");
+		return 1;
+	}
+
+	if (NULL == genlmsg_put(msg, 0, 0, nlstate.nl80211_id, 0, 0,
+				NL80211_CMD_VENDOR, 0))
+		goto nla_put_failure;
+
+	devidx = if_nametoindex(argv[1]);
+
+	if (devidx == 0)
+	{
+		if (errno == ENODEV)
+			fprintf(stderr, "%s: %s\n", strerror(errno), argv[1]);
+
+		goto nla_put_failure;
+	}
+
+	NLA_PUT_U32(msg, NL80211_ATTR_IFINDEX, devidx);
+	NLA_PUT_U32(msg, NL80211_ATTR_VENDOR_ID, NXP_OUI);
+	NLA_PUT_U32(msg, NL80211_ATTR_VENDOR_SUBCMD,
+		    NXPWIFI_VENDOR_CMD_TWT_CFG);
+	td.negotiation_type = (uint8_t)atoi(argv[3]);
+	td.flow_identifier = (uint8_t)atoi(argv[4]);
+	td.teardown_all_twt = (uint8_t)atoi(argv[5]);
+	nested = nla_nest_start(msg, NL80211_ATTR_VENDOR_DATA);
+
+	if (!nested)
+		goto nla_put_failure;
+
+	NLA_PUT(msg, NXPWIFI_TWT_TEARDOWN, sizeof(td), &td);
+	nla_nest_end(msg, nested);
+
+	if (send_msg(msg) < 0)
+	{
+		fprintf(stderr, "Failed to send TWT teardown\n");
+		goto nla_put_failure;
+	}
+
+	if (nl_wait_for_ack(nlstate.nl_sock) < 0)
+	{
+		fprintf(stderr, "TWT teardown ack error\n");
+		goto nla_put_failure;
+	}
+
+	nlmsg_free(msg);
+	return 0;
+
+nla_put_failure :
+	nlmsg_free(msg);
+	return 1;
+}
+
+/* ===== Helpers to send vendor messages for TWT ===== */
+static int send_twt_setup_msg(const char *ifname, const void *setup)
+{
+	struct nl_msg *msg = nlmsg_alloc();
+	struct nlattr *nested;
+	int ifindex, sent, ack;
+
+	if (!msg)
+	{
+		fprintf(stderr, "alloc netlink msg failed\n");
+		return 1;
+	}
+
+	genlmsg_put(msg, 0, 0, nlstate.nl80211_id, 0, 0, NL80211_CMD_VENDOR,
+		     0);
+	ifindex = if_nametoindex(ifname);
+
+	if (ifindex == 0)
+	{
+		fprintf(stderr, "%s: %s\n", strerror(errno), ifname);
+		nlmsg_free(msg);
+		return 1;
+	}
+	NLA_PUT_U32(msg, NL80211_ATTR_IFINDEX, ifindex);
+	NLA_PUT_U32(msg, NL80211_ATTR_VENDOR_ID, NXP_OUI);
+	NLA_PUT_U32(msg, NL80211_ATTR_VENDOR_SUBCMD,
+		     NXPWIFI_VENDOR_CMD_TWT_CFG);
+	nested = nla_nest_start(msg, NL80211_ATTR_VENDOR_DATA);
+
+	if (!nested)
+		goto nla_put_failure;
+
+	NLA_PUT(msg, NXPWIFI_TWT_SETUP, sizeof(struct nxpwifiutl_twt_setup),
+		 setup);
+	nla_nest_end(msg, nested);
+	sent = send_msg(msg);
+
+	if (sent < 0)
+	{
+		fprintf(stderr, "send twt setup failed: %s\n", strerror(sent));
+		goto nla_put_failure;
+	}
+
+	ack = nl_wait_for_ack(nlstate.nl_sock);
+
+	if (ack < 0)
+	{
+		fprintf(stderr, "twt setup ack error: %s\n", nl_geterror(ack));
+		goto nla_put_failure;
+	}
+
+	nlmsg_free(msg);
+	return 0;
+
+nla_put_failure:
+	nlmsg_free(msg);
+	return 1;
+}
+
+static int send_twt_teardown_msg(const char *ifname, const void *teardown)
+{
+	struct nl_msg *msg = nlmsg_alloc();
+	struct nlattr *nested;
+	int ifindex, sent, ack;
+	if (!msg)
+	{
+		fprintf(stderr, "alloc netlink msg failed\n");
+		return 1;
+	}
+	genlmsg_put(msg, 0, 0, nlstate.nl80211_id, 0, 0, NL80211_CMD_VENDOR,
+		     0);
+	ifindex = if_nametoindex(ifname);
+	if (ifindex == 0)
+	{
+		fprintf(stderr, "%s: %s\n", strerror(errno), ifname);
+		nlmsg_free(msg);
+		return 1;
+	}
+	NLA_PUT_U32(msg, NL80211_ATTR_IFINDEX, ifindex);
+	NLA_PUT_U32(msg, NL80211_ATTR_VENDOR_ID, NXP_OUI);
+	NLA_PUT_U32(msg, NL80211_ATTR_VENDOR_SUBCMD,
+		     NXPWIFI_VENDOR_CMD_TWT_CFG);
+	nested = nla_nest_start(msg, NL80211_ATTR_VENDOR_DATA);
+
+	if (!nested)
+		goto nla_put_failure;
+	NLA_PUT(msg, NXPWIFI_TWT_TEARDOWN,
+		 sizeof(struct nxpwifiutl_twt_teardown), teardown);
+	nla_nest_end(msg, nested);
+	sent = send_msg(msg);
+	if (sent < 0)
+	{
+		fprintf(stderr, "send twt teardown failed: %s\n",
+			strerror(sent));
+		goto nla_put_failure;
+	}
+	ack = nl_wait_for_ack(nlstate.nl_sock);
+	if (ack < 0)
+	{
+		fprintf(stderr, "twt teardown ack error: %s\n",
+			nl_geterror(ack));
+		goto nla_put_failure;
+	}
+	nlmsg_free(msg);
+	return 0;
+
+nla_put_failure: 
+	nlmsg_free(msg);
+	return 1;
+}
+
+static int
+send_btwt_ap_config_set_msg(const char *ifname, const void *req, size_t len)
+{
+	struct nl_msg *msg = nlmsg_alloc();
+	struct nlattr *nested = NULL;
+	int ifindex, sent, ack;
+
+	if (!msg)
+	{
+		fprintf(stderr, "alloc netlink msg failed\n");
+		return 1;
+	}
+	genlmsg_put(msg, 0, 0, nlstate.nl80211_id, 0, 0, NL80211_CMD_VENDOR,
+		    0);
+	ifindex = if_nametoindex(ifname);
+	if (ifindex == 0)
+	{
+		fprintf(stderr, "%s: %s\n", strerror(errno), ifname);
+		nlmsg_free(msg);
+		return 1;
+	}
+	NLA_PUT_U32(msg, NL80211_ATTR_IFINDEX, ifindex);
+	NLA_PUT_U32(msg, NL80211_ATTR_VENDOR_ID, NXP_OUI);
+	NLA_PUT_U32(msg, NL80211_ATTR_VENDOR_SUBCMD,
+		    NXPWIFI_VENDOR_CMD_TWT_CFG);
+
+	/*Put request under NL80211_ATTR_VENDOR_DATA(nested) */
+	nested = nla_nest_start(msg, NL80211_ATTR_VENDOR_DATA);
+
+	if (!nested)
+		goto nla_put_failure;
+
+	NLA_PUT(msg, NXPWIFI_TWT_BTWT_AP_CFG_SET, len, req);
+	nla_nest_end(msg, nested);
+	sent = send_msg(msg);
+	if (sent < 0)
+	{
+		fprintf(stderr, "send btwt ap cfg set failed: %s\n",
+			strerror(sent));
+		goto nla_put_failure;
+	}
+	ack = nl_wait_for_ack(nlstate.nl_sock);
+	if (ack < 0)
+	{
+		fprintf(stderr, "btwt ap cfg set ack error: %s\n",
+			nl_geterror(ack));
+		goto nla_put_failure;
+	}
+	nlmsg_free(msg);
+	return 0;
+nla_put_failure:
+	nlmsg_free(msg);
+	return 1;
+}
+
+static int process_twt_conf(int argc, char *argv[])
+{
+	if (argc != 4) {
+		fprintf(stderr, "Usage: %s <ifname> twt_conf <conf_file>\n",
+			argv[0]);
+		return 1;
+	}
+	struct nxpwifiutl_twt_setup setup = {0};
+	struct nxpwifiutl_twt_teardown teardown = {0};
+	if (parse_twt_conf(argv[3], &setup, &teardown) < 0)
+		return 1;
+
+	if (setup.twt_mantissa) {
+		return send_twt_setup_msg(argv[1], &setup);
+	}
+
+	if (teardown.teardown_all_twt || teardown.flow_identifier) {
+		return send_twt_teardown_msg(argv[1], &teardown);
+	}
+	return 0;
+}
+
 static void nl80211_cleanup(struct nl80211_state *state)
 {
 	nl_socket_free(state->nl_sock);

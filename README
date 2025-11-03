@@ -88,6 +88,50 @@ headID, tailID: 4 bytes each
 chipID: 1 byte
 csifilterN: Up to 16 filters, each 9 bytes (MAC[6], pkt_type, subtype, flags)
 
+TWT Command Details
+
+TWT (Target Wake Time) commands allow configuration of 802.11ax power-saving sessions and Broadcast TWT settings.
+
+Basic Usage
+
+nxpwifiutl <ifname> twt <args...> [--dump]
+
+- `<ifname>`: Wireless interface name (e.g., `mlan0` for STA, `uap0` for AP)
+- `<args>`: One of the following modes:
+  - Setup (12 parameters)
+
+    nxpwifiutl <ifname> twt <implicit> <announced> <trigger_enabled> <twt_info_disabled> \
+    <negotiation_type> <twt_wakeup_duration> <flow_identifier> <hard_constraint> \
+    <twt_exponent> <twt_mantissa> <twt_request> <bcn_miss_threshold>
+
+    Example:
+    nxpwifiutl mlan0 twt 1 0 0 1 0 64 0 1 10 512 0 5
+
+  - From config file (section-based)
+    nxpwifiutl <ifname> twt <conf_file> <twt_setup|twt_teardown|twt_information|btwt_AP_config_get|btwt_AP_config_set>
+
+    Example:
+    nxpwifiutl mlan0 twt twt.conf twt_setup
+    nxpwifiutl mlan0 twt twt.conf twt_teardown
+    nxpwifiutl mlan0 twt twt.conf twt_information
+    nxpwifiutl uap0 twt twt.conf btwt_AP_config_get
+    nxpwifiutl uap0 twt twt.conf btwt_AP_config_set
+
+
+  - Supported Sections in `twt.conf`
+    `twt_setup={...}`: Configure TWT session parameters (implicit, announced, mantissa, exponent, etc.)
+    `twt_teardown={...}`: Remove TWT session (single flow or all)
+    `twt_information={...}`: Suspend/resume TWT session for specified duration
+    `btwt_AP_config_set={...}`: Set Broadcast TWT AP configuration (AP interface only)
+
+  - Notes for TWT commands
+    - Use **STA interface** (`mlan0`) for `twt_setup`, `twt_teardown`, `twt_information`.
+    - Use **AP interface** (`uap0`) for `btwt_AP_config_get` and `btwt_AP_config_set`.
+    - `--dump` prints outgoing netlink message for debugging.
+    - BTWT requires at least **two sets** for valid configuration; typical ranges:
+     - `Ap_Bcast_Exponent`: 10–26
+    - `nominalwake`: 64–255
+
 Notes
 
 Most commands support query mode (only <cmd>) and set mode (with arguments).
