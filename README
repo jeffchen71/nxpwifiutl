@@ -11,7 +11,7 @@ CSI (Channel State Information)
 Clock Synchronization
 Independent Reset
 Raw Host Commands
-
+dfstesting
 
 Environment
 
@@ -45,7 +45,7 @@ csi	Configure CSI collection (enable/disable or load config file)
 clocksync	Configure GPIO TSF latch for clock synchronization
 indrstcfg	Configure independent reset mode and GPIO pin
 hostcmd	Send raw hostcmd from config file (e.g., edmac_ctrl, txpwrlimit)
-
+dfstesting    Configure DFS testing parameters (CAC/NOP periods, channel change policy)
 
 hsoffload Command Details
 # Query current hsoffload settings
@@ -131,6 +131,25 @@ nxpwifiutl <ifname> twt <args...> [--dump]
     - BTWT requires at least **two sets** for valid configuration; typical ranges:
      - `Ap_Bcast_Exponent`: 10–26
     - `nominalwake`: 64–255
+
+DFS Testing Command Details
+# Query current DFS testing settings
+nxpwifiutl <ifname> dfstesting
+
+# Set DFS testing parameters
+nxpwifiutl <ifname> dfstesting <user_cac_pd> <user_nop_pd> <no_chan_change> <fixed_chan_num> <cac_restart>
+
+Where:
+  <user_cac_pd>    : 0 (use default 60s) or 1..1800 (seconds)
+  <user_nop_pd>    : 0 (use default 1800s) or 1..65535 (seconds)
+  <no_chan_change> : 0 or 1
+  <fixed_chan_num> : 0 (disable) or 1..255 (effective only if no_chan_change=0)
+  <cac_restart>    : 0 or 1 (auto restart CAC after radar)
+
+Examples:
+  nxpwifiutl mlan0 dfstesting
+  nxpwifiutl mlan0 dfstesting 60 0 0 0 1
+  nxpwifiutl mlan0 dfstesting 0 120 0 64 0
 
 Notes
 
