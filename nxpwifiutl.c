@@ -46,7 +46,8 @@ enum nxpwifi_vendor_commands {
 	NXPWIFI_VENDOR_CMD_EDMAC_CFG,
 	NXPWIFI_VENDOR_CMD_VHT_CFG,
 	NXPWIFI_VENDOR_CMD_TXPOWER_LIMIT,
-	NXPWIFI_VENDOR_CMD_TWT_CFG
+	NXPWIFI_VENDOR_CMD_TWT_CFG,
+	NXPWIFI_VENDOR_CMD_DFS_TESTING
 };
 
 enum nxpwifiutl_rawdata_attrs {
@@ -97,6 +98,15 @@ enum nxpwifi_twt_attrs {
 	NXPWIFI_TWT_BTWT_AP_CFG_GET,
 	NXPWIFI_TWT_BTWT_AP_CFG_SET,
 	NXPWIFI_TWT_MAX
+};
+
+enum nxpwifi_dfs_test_attrs {
+	NXPWIFI_DFS_TEST_ATTR_UNSPEC,
+	NXPWIFI_DFS_TEST_ATTR_USER_CAC_PD,
+	NXPWIFI_DFS_TEST_ATTR_USER_NOP_PD,
+	NXPWIFI_DFS_TEST_ATTR_NO_CHAN_CHANGE,
+	NXPWIFI_DFS_TEST_ATTR_FIXED_CHAN_NUM,
+	NXPWIFI_DFS_TEST_ATTR_CAC_RESTART
 };
 
 enum nxpwifi_host_cmds {
@@ -303,6 +313,7 @@ static int parse_twt_section(const char *filename, const char *section,
 			     struct nxpwifiutl_twt_setup *s,
 			     struct nxpwifiutl_twt_teardown *td,
 			     struct nxpwifiutl_twt_information *inf);
+static int process_dfstesting(int argc, char *argv[]);
 
 struct command_node command_list[] = {
     {"hscfg", process_hscfg},
@@ -319,7 +330,8 @@ struct command_node command_list[] = {
     {"twt", process_twt_cfg},
     {"twt_teardown", process_twt_teardown},
     {"twt_information", process_twt_information},
-    {"twt_conf", process_twt_conf}
+    {"twt_conf", process_twt_conf},
+    {"dfstesting", process_dfstesting},
 };
 
 static struct nla_policy antenna_policy[NXPWIFI_ANTENNA_ATTR_MAX + 1] = {
@@ -339,11 +351,18 @@ static char *usage[] = {
     " channel_switch : Channel switch configuration",
     " antcfg : Antenna configuration",
     " vhtcfg : VHT (802.11ac) IE configuration",
+    " dfstesting : DFS testing configuration (GET/SET)",
     " Examples:",
     " nxpwifiutl mlan0 vhtcfg 2 1",
     " -> Get current VHT configuration in 5GHz for STA",
     " nxpwifiutl mlan0 vhtcfg 2 2 0 0x000001f0 0xfff5 0xfffa",
     " -> Set VHT capabilities with MCS map for STA",
+    " nxpwifiutl mlan0 dfstesting",
+    " -> GET: dump current DFS testing parameters (user_cac_pd / user_nop_pd / no_chan_change / fixed_chan_num / cac_restart)",
+    " nxpwifiutl mlan0 dfstesting 60 0 0 0 1",
+    " -> SET: CAC=60s, keep default NOP, allow channel change, no fixed channel, auto restart CAC",
+    " nxpwifiutl mlan0 dfstesting 0 120 0 64 0",
+    " -> SET: use default CAC, NOP=120s, change to fixed channel 64 on radar, no auto restart",
     " csi : CSI (Channel State Information) configuration",
     " clocksync : GPIO TSF latch configuration",
     " indrstcfg : Independent reset configuration",
@@ -885,6 +904,71 @@ static int print_btwt_ap_config_response(struct nl_msg *msg, void *arg)
 		printf("    nominalwake:       %u\n", s->nominalwake);
 	}
 	return NL_OK;
+}
+
+
+/* Holds parsed dfstesting values from a vendor reply */
+struct dfstesting_resp {
+    bool have_cac_pd;
+    bool have_nop_pd;
+    bool have_no_change;
+    bool have_fixed_chan;
+    bool have_cac_restart;
+
+    uint32_t user_cac_pd;     /* seconds */
+    uint32_t user_nop_pd;     /* seconds */
+    uint8_t  no_chan_change;  /* 0/1 */
+    uint32_t fixed_chan_num;  /* 0 or 1..255 */
+    uint8_t  cac_restart;     /* 0/1 */
+};
+
+/* libnl callback to parse the vendor reply for dfstesting */
+static int dfstesting_reply_cb(struct nl_msg *msg, void *arg)
+{
+    struct dfstesting_resp *r = (struct dfstesting_resp *)arg;
+    struct nlmsghdr *nlh = nlmsg_hdr(msg);
+    struct genlmsghdr *ghdr = (struct genlmsghdr *)nlmsg_data(nlh);
+    struct nlattr *attrs[NL80211_ATTR_MAX + 1];
+
+    if (nla_parse(attrs, NL80211_ATTR_MAX,
+                  genlmsg_attrdata(ghdr, 0),
+                  genlmsg_attrlen(ghdr, 0),
+                  NULL)) {
+        return NL_STOP;
+    }
+
+    if (!attrs[NL80211_ATTR_VENDOR_DATA])
+        return NL_STOP;
+
+    /* Parse nested vendor data. We assume vendor attr IDs < 256. */
+    struct nlattr *tb[256] = {0};
+    struct nlattr *vd = attrs[NL80211_ATTR_VENDOR_DATA];
+
+    if (nla_parse(tb, 255, nla_data(vd), nla_len(vd), NULL))
+        return NL_STOP;
+
+    if (tb[NXPWIFI_DFS_TEST_ATTR_USER_CAC_PD]) {
+        r->user_cac_pd = nla_get_u32(tb[NXPWIFI_DFS_TEST_ATTR_USER_CAC_PD]);
+        r->have_cac_pd = true;
+    }
+    if (tb[NXPWIFI_DFS_TEST_ATTR_USER_NOP_PD]) {
+        r->user_nop_pd = nla_get_u32(tb[NXPWIFI_DFS_TEST_ATTR_USER_NOP_PD]);
+        r->have_nop_pd = true;
+    }
+    if (tb[NXPWIFI_DFS_TEST_ATTR_NO_CHAN_CHANGE]) {
+        r->no_chan_change = nla_get_u8(tb[NXPWIFI_DFS_TEST_ATTR_NO_CHAN_CHANGE]);
+        r->have_no_change = true;
+    }
+    if (tb[NXPWIFI_DFS_TEST_ATTR_FIXED_CHAN_NUM]) {
+        r->fixed_chan_num = nla_get_u32(tb[NXPWIFI_DFS_TEST_ATTR_FIXED_CHAN_NUM]);
+        r->have_fixed_chan = true;
+    }
+    if (tb[NXPWIFI_DFS_TEST_ATTR_CAC_RESTART]) {
+        r->cac_restart = nla_get_u8(tb[NXPWIFI_DFS_TEST_ATTR_CAC_RESTART]);
+        r->have_cac_restart = true;
+    }
+
+    return NL_OK; /* continue if there are more messages */
 }
 
 /**
@@ -3009,6 +3093,176 @@ static int process_twt_conf(int argc, char *argv[])
 	}
 	return 0;
 }
+
+
+static int process_dfstesting(int argc, char *argv[])
+{
+    /* Expected forms:
+     *   nxpwifiutl <ifname> dfstesting
+     *   nxpwifiutl <ifname> dfstesting <user_cac_pd> <user_nop_pd> <no_chan_change> <fixed_chan_num> <cac_restart>
+     *
+     * Where:
+     *   user_cac_pd   : 0 (use default 60s) or 1..1800
+     *   user_nop_pd   : 0 (use default 1800s) or 1..65535
+     *   no_chan_change: 0 or 1
+     *   fixed_chan_num: 0 (disable) or 1..255 (only effective if no_chan_change=0)
+     *   cac_restart   : 0 or 1
+     */
+
+    struct nl_msg *msg = NULL;
+    struct nlattr *nested = NULL;
+    signed long long devidx = 0;
+
+    /* argc must be 3 (GET) or 8 (SET) */
+    if (!(argc == 3 || argc == 8)) {
+        fprintf(stderr,
+            "Usage:\n"
+            "  %s <ifname> dfstesting [<user_cac_pd> <user_nop_pd> <no_chan_change> <fixed_chan_num> <cac_restart>]\n"
+            "Where:\n"
+            "  <user_cac_pd>   : 0 (use default 60s) or 1..1800\n"
+            "  <user_nop_pd>   : 0 (use default 1800s) or 1..65535\n"
+            "  <no_chan_change>: 0/1\n"
+            "  <fixed_chan_num>: 0 (disable) or 1..255 (effective only if no_chan_change=0)\n"
+            "  <cac_restart>   : 0/1 (auto restart CAC after success)\n"
+            "Examples:\n"
+            "  %s mlan0 dfstesting\n"
+            "  %s mlan0 dfstesting 60 0 0 0 1\n"
+            "  %s mlan0 dfstesting 0 120 0 64 0\n"
+            "  %s mlan0 dfstesting 0 0 1 0 0\n",
+            argv[0], argv[0], argv[0], argv[0], argv[0]);
+        return 1;
+    }
+
+    /* Build a nl80211 vendor command */
+    msg = nlmsg_alloc();
+    if (!msg) {
+        fprintf(stderr, "failed to allocate netlink message\n");
+        return 1;
+    }
+
+    if (NULL == genlmsg_put(msg, 0, 0, nlstate.nl80211_id, 0, 0,
+                            NL80211_CMD_VENDOR, 0))
+        goto nla_put_failure;
+
+    /* Resolve interface index */
+    devidx = if_nametoindex(argv[1]);
+    if (devidx == 0) {
+        if (errno == ENODEV)
+            fprintf(stderr, "%s: %s\n", strerror(errno), argv[1]);
+        goto nla_put_failure;
+    }
+
+    /* Common vendor headers */
+    NLA_PUT_U32(msg, NL80211_ATTR_IFINDEX, devidx);
+    NLA_PUT_U32(msg, NL80211_ATTR_VENDOR_ID, NXP_OUI);
+    NLA_PUT_U32(msg, NL80211_ATTR_VENDOR_SUBCMD, NXPWIFI_VENDOR_CMD_DFS_TESTING);
+
+
+	/* GET case: argc == 3 -> send vendor command without NL80211_ATTR_VENDOR_DATA,
+	 * then receive and print the parsed result.
+	 */
+	if (argc == 3) {
+		struct nl_cb *cb = NULL;
+		struct dfstesting_resp resp = {0};
+
+		if (send_msg(msg) < 0) {
+			fprintf(stderr, "Failed to send dfstesting GET\n");
+			goto nla_put_failure;
+		}
+
+		/* Prepare a callback set that parses the vendor reply */
+		cb = nl_cb_alloc(NL_CB_DEFAULT);
+		if (!cb) {
+			fprintf(stderr, "failed to allocate nl_cb\n");
+			goto nla_put_failure;
+		}
+		nl_cb_set(cb, NL_CB_VALID, NL_CB_CUSTOM, dfstesting_reply_cb, &resp);
+
+		/* Receive and parse one or more replies */
+		if (nl_recvmsgs(nlstate.nl_sock, cb) < 0) {
+			fprintf(stderr, "dfstesting GET recv error\n");
+			nl_cb_put(cb);
+			goto nla_put_failure;
+		}
+		nl_cb_put(cb);
+
+		/* Print a human-readable summary. If an attribute was not present, print N/A. */
+		printf("dfstesting (current): "
+				"user_cac_pd=%s, user_nop_pd=%s, no_chan_change=%s, fixed_chan_num=%s, cac_restart=%s\n",
+				resp.have_cac_pd    ? ({ static char b1[16]; snprintf(b1, sizeof(b1), "%u", resp.user_cac_pd); b1; }) : "N/A",
+				resp.have_nop_pd    ? ({ static char b2[16]; snprintf(b2, sizeof(b2), "%u", resp.user_nop_pd); b2; }) : "N/A",
+				resp.have_no_change ? (resp.no_chan_change ? "1" : "0") : "N/A",
+				resp.have_fixed_chan? ({ static char b3[16]; snprintf(b3, sizeof(b3), "%u", resp.fixed_chan_num); b3; }) : "N/A",
+				resp.have_cac_restart ? (resp.cac_restart ? "1" : "0") : "N/A");
+
+		nlmsg_free(msg);
+		return 0;
+	}
+
+    /* SET case: argc == 8 -> parse and validate five parameters */
+    {
+        /* argv[3]..argv[7] */
+        long user_cac_pd   = strtol(argv[3], NULL, 0);
+        long user_nop_pd   = strtol(argv[4], NULL, 0);
+        long no_chan_change= strtol(argv[5], NULL, 0);
+        long fixed_chan_num= strtol(argv[6], NULL, 0);
+        long cac_restart   = strtol(argv[7], NULL, 0);
+
+        /* Validate ranges per spec */
+        if (!((user_cac_pd == 0) || (user_cac_pd >= 1 && user_cac_pd <= 1800))) {
+            fprintf(stderr, "user_cac_pd invalid: must be 0 or 1..1800\n");
+            goto nla_put_failure;
+        }
+        if (!((user_nop_pd == 0) || (user_nop_pd >= 1 && user_nop_pd <= 65535))) {
+            fprintf(stderr, "user_nop_pd invalid: must be 0 or 1..65535\n");
+            goto nla_put_failure;
+        }
+        if (!(no_chan_change == 0 || no_chan_change == 1)) {
+            fprintf(stderr, "no_chan_change invalid: must be 0 or 1\n");
+            goto nla_put_failure;
+        }
+        if (!((fixed_chan_num == 0) || (fixed_chan_num >= 1 && fixed_chan_num <= 255))) {
+            fprintf(stderr, "fixed_chan_num invalid: must be 0 or 1..255\n");
+            goto nla_put_failure;
+        }
+        if (!(cac_restart == 0 || cac_restart == 1)) {
+            fprintf(stderr, "cac_restart invalid: must be 0 or 1\n");
+            goto nla_put_failure;
+        }
+
+        /* Build nested vendor data */
+        nested = nla_nest_start(msg, NL80211_ATTR_VENDOR_DATA);
+        if (!nested)
+            goto nla_put_failure;
+
+        /* Always include all five attrs (zeros are meaningful settings) */
+        NLA_PUT_U32(msg, NXPWIFI_DFS_TEST_ATTR_USER_CAC_PD,   (uint32_t)user_cac_pd);
+        NLA_PUT_U32(msg, NXPWIFI_DFS_TEST_ATTR_USER_NOP_PD,   (uint32_t)user_nop_pd);
+        NLA_PUT_U8 (msg, NXPWIFI_DFS_TEST_ATTR_NO_CHAN_CHANGE,(uint8_t) no_chan_change);
+        NLA_PUT_U32(msg, NXPWIFI_DFS_TEST_ATTR_FIXED_CHAN_NUM,(uint32_t)fixed_chan_num);
+        NLA_PUT_U8 (msg, NXPWIFI_DFS_TEST_ATTR_CAC_RESTART,   (uint8_t) cac_restart);
+
+        nla_nest_end(msg, nested);
+
+        /* Send and wait for ack */
+        if (send_msg(msg) < 0) {
+            fprintf(stderr, "Failed to send dfstesting SET\n");
+            goto nla_put_failure;
+        }
+        if (nl_wait_for_ack(nlstate.nl_sock) < 0) {
+            fprintf(stderr, "dfstesting SET ack error\n");
+            goto nla_put_failure;
+        }
+
+        nlmsg_free(msg);
+        return 0;
+    }
+
+nla_put_failure:
+    nlmsg_free(msg);
+    return 1;
+}
+
 
 static void nl80211_cleanup(struct nl80211_state *state)
 {
