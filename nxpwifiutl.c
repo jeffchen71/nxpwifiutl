@@ -744,6 +744,7 @@ static int print_edmac_cfg_response(struct nl_msg *msg, void *arg)
 	}
 	return NL_OK;
 }
+
 static int print_txpwrlimit_response(struct nl_msg *msg, void *arg)
 {
 	struct nlattr *attr;
@@ -761,13 +762,16 @@ static int print_txpwrlimit_response(struct nl_msg *msg, void *arg)
 		fprintf(stderr, "vendor data attribute missing!\n");
 		return NL_SKIP;
 	}
+
 	nla_parse_nested(tb_vendor, NXPWIFI_ATTR_MAX, attr, NULL);
 	if (!tb_vendor[NXPWIFI_ATTR_TXPWR_LIMIT]) {
 		fprintf(stderr, "TX Power Limit attribute missing!\n");
 		return NL_SKIP;
 	}
 	attr_data = (uint8_t *)nla_data(tb_vendor[NXPWIFI_ATTR_TXPWR_LIMIT]);
-	chtrpc_tlv = (struct nxpwifiutl_chtrpc_cfg *)(attr_data + 4);
+	len = nla_len(tb_vendor[NXPWIFI_ATTR_TXPWR_LIMIT]);
+
+	chtrpc_tlv = (struct nxpwifiutl_chtrpc_cfg *)attr_data;
 	/* Process result */
 	printf("---------------------------------------------------------------"
 	       "-----------\n");
