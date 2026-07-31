@@ -24,7 +24,7 @@
 #include <endian.h>
 #include <ctype.h>
 
-#define NXPWIFIUTL_VER "1.3"
+#define NXPWIFIUTL_VER "1.4"
 /** Find number of elements */
 #define NELEMENTS(x) (sizeof(x) / sizeof(x[0]))
 #define NXP_OUI 0x006037
