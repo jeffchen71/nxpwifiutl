@@ -60,8 +60,24 @@ enum nxpwifiutl_rawdata_attrs {
 	NXPWIFI_INDRST_CFG,
 	NXPWIFI_ATTR_MAC_ADDR,
 	NXPWIFI_ATTR_CHSWITCH,
-	NXPWIFI_ATTR_TXPWR_LIMIT,
 	NXPWIFI_ATTR_MAX
+};
+
+/* Actions for NXPWIFI_ATTR_TXPWR_ACTION. */
+enum nxpwifi_txpwr_action {
+	NXPWIFI_TXPWR_ACTION_GET,
+	NXPWIFI_TXPWR_ACTION_SET,
+};
+
+/* Attributes for NXPWIFI_VENDOR_CMD_TXPOWER_LIMIT. */
+enum nxpwifi_txpwr_attrs {
+	NXPWIFI_ATTR_TXPWR_UNSPEC,
+	NXPWIFI_ATTR_TXPWR_ACTION,	/* u8, enum nxpwifi_txpwr_action */
+	NXPWIFI_ATTR_TXPWR_SUBBAND,	/* u8, subband selector for GET */
+	NXPWIFI_ATTR_TXPWR_DATA,	/* binary, per-subband TRPC TLVs */
+
+	__NXPWIFI_ATTR_TXPWR_AFTER_LAST,
+	NXPWIFI_ATTR_TXPWR_MAX = __NXPWIFI_ATTR_TXPWR_AFTER_LAST - 1
 };
 /**
  * CSI vendor attribute enum (dedicated)
@@ -455,8 +471,6 @@ static const char *nxpwifi_vendor_attr_name(uint16_t t)
 		return "NXPWIFI_ATTR_MAC_ADDR";
 	case NXPWIFI_ATTR_CHSWITCH:
 		return "NXPWIFI_ATTR_CHSWITCH";
-	case NXPWIFI_ATTR_TXPWR_LIMIT:
-		return "NXPWIFI_ATTR_TXPWR_LIMIT";
 	default:
 		return NULL;
 	}
@@ -780,8 +794,7 @@ static int print_txpwrlimit_response(struct nl_msg *msg, void *arg)
 	struct genlmsghdr *gnlh = nlmsg_data(nlmsg_hdr(msg));
 	uint8_t *attr_data;
 	int len;
-	uint8_t *data;
-	struct nlattr *tb_vendor[NXPWIFI_ATTR_MAX + 1];
+	struct nlattr *tb_vendor[NXPWIFI_ATTR_TXPWR_MAX + 1];
 	struct nxpwifiutl_chtrpc_cfg *chtrpc_tlv;
 	int left_len, i;
 	int mod_num = 0;
@@ -792,22 +805,20 @@ static int print_txpwrlimit_response(struct nl_msg *msg, void *arg)
 		return NL_SKIP;
 	}
 
-	nla_parse_nested(tb_vendor, NXPWIFI_ATTR_MAX, attr, NULL);
-	if (!tb_vendor[NXPWIFI_ATTR_TXPWR_LIMIT]) {
+	nla_parse_nested(tb_vendor, NXPWIFI_ATTR_TXPWR_MAX, attr, NULL);
+	if (!tb_vendor[NXPWIFI_ATTR_TXPWR_DATA]) {
 		fprintf(stderr, "TX Power Limit attribute missing!\n");
 		return NL_SKIP;
 	}
-	attr_data = (uint8_t *)nla_data(tb_vendor[NXPWIFI_ATTR_TXPWR_LIMIT]);
-	len = nla_len(tb_vendor[NXPWIFI_ATTR_TXPWR_LIMIT]);
+	attr_data = (uint8_t *)nla_data(tb_vendor[NXPWIFI_ATTR_TXPWR_DATA]);
+	len = nla_len(tb_vendor[NXPWIFI_ATTR_TXPWR_DATA]);
 
 	chtrpc_tlv = (struct nxpwifiutl_chtrpc_cfg *)attr_data;
 	/* Process result */
 	printf("---------------------------------------------------------------"
 	       "-----------\n");
-	printf("Get txpwrlimit: sub_band=0x%x len=%d\n",
-	       *((uint16_t *)attr_data + 1),
-	       nla_len(tb_vendor[NXPWIFI_ATTR_TXPWR_LIMIT]));
-	left_len = nla_len(tb_vendor[NXPWIFI_ATTR_TXPWR_LIMIT]) - 4;
+	printf("Get txpwrlimit: len=%d\n", len);
+	left_len = len;
 	while (left_len >= (int)sizeof(struct nxpwifiutl_iehdr)) {
 		switch (le16toh(chtrpc_tlv->hdr.type)) {
 		case TLV_TYPE_CHAN_TRPC_CONFIG:
@@ -1740,6 +1751,9 @@ static int process_chtrpc_cfg(signed long long devidx, unsigned char *buffer,
 {
 	struct nl_msg *msg;
 	struct nl_cb *cb;
+	struct nlattr *nested;
+	uint8_t action, subband;
+	bool is_get;
 	msg = nlmsg_alloc();
 	if (!msg) {
 		fprintf(stderr, "failed to allocate netlink message\n");
@@ -1753,14 +1767,31 @@ static int process_chtrpc_cfg(signed long long devidx, unsigned char *buffer,
 	NLA_PUT_U32(msg, NL80211_ATTR_VENDOR_ID, NXP_OUI);
 	NLA_PUT_U32(msg, NL80211_ATTR_VENDOR_SUBCMD,
 		    NXPWIFI_VENDOR_CMD_TXPOWER_LIMIT);
-	NLA_PUT(msg, NL80211_ATTR_VENDOR_DATA, cmd_len, buffer);
-	if (cmd_len == 4) {
+
+	/* The parsed hostcmd buffer starts with the firmware payload:
+	 * action (u16 LE) + subband (u16 LE) + optional TRPC TLVs.
+	 * A GET has no TLVs (cmd_len == 4).
+	 */
+	action = (uint8_t)le16toh(*(uint16_t *)buffer);
+	subband = (uint8_t)le16toh(*(uint16_t *)(buffer + 2));
+	is_get = (action == NXPWIFI_TXPWR_ACTION_GET);
+
+	nested = nla_nest_start(msg, NL80211_ATTR_VENDOR_DATA);
+	if (!nested)
+		goto nla_put_failure;
+	NLA_PUT_U8(msg, NXPWIFI_ATTR_TXPWR_ACTION, action);
+	NLA_PUT_U8(msg, NXPWIFI_ATTR_TXPWR_SUBBAND, subband);
+	if (!is_get && cmd_len > 4)
+		NLA_PUT(msg, NXPWIFI_ATTR_TXPWR_DATA, cmd_len - 4, buffer + 4);
+	nla_nest_end(msg, nested);
+
+	if (is_get) {
 		cb = nl_cb_alloc(NL_CB_DEFAULT);
 		register_handler(print_txpwrlimit_response, (void *)false);
 		nl_cb_set(cb, NL_CB_VALID, NL_CB_CUSTOM, valid_handler, NULL);
 	}
 	send_msg(msg);
-	if (cmd_len == 4) {
+	if (is_get) {
 		nl_recvmsgs(nlstate.nl_sock, cb);
 		nl_cb_put(cb);
 	}
