@@ -1538,9 +1538,38 @@ static int nxpwifi_get_hostcmd_data(FILE *fp, int *ln, unsigned char *buf,
 	int errors = 0, i;
 	char line[512], *pos, *pos1, *pos2, *pos3;
 	unsigned short len;
+	/* Stack to support nested "field:N={ ... }" blocks. For each open
+	 * brace we remember the buffer position of the reserved length field
+	 * and the running *size at that point, so the length can be
+	 * back-filled with the number of bytes emitted inside the block when
+	 * the matching "}" is reached.
+	 */
+	struct {
+		unsigned char *len_ptr;
+		unsigned short len_bytes;
+		unsigned short size_at_open;
+	} brace_stack[16];
+	int brace_sp = 0;
 	while ((pos = nxpwifi_config_get_line(fp, line, sizeof(line), ln))) {
 		(*ln)++;
 		if (strcmp(pos, "}") == 0) {
+			if (brace_sp > 0) {
+				/* Close the innermost block: back-fill its
+				 * length field with the bytes emitted since it
+				 * was opened.
+				 */
+				unsigned int v;
+				unsigned char *lp;
+				brace_sp--;
+				v = *size - brace_stack[brace_sp].size_at_open;
+				lp = brace_stack[brace_sp].len_ptr;
+				for (i = 0; i < brace_stack[brace_sp].len_bytes;
+				     i++) {
+					*lp++ = (unsigned char)(v & 0xff);
+					v >>= 8;
+				}
+				continue;
+			}
 			break;
 		}
 		pos1 = strchr(pos, ':');
@@ -1567,7 +1596,25 @@ static int nxpwifi_get_hostcmd_data(FILE *fp, int *ln, unsigned char *buf,
 			continue;
 		}
 		*size += len;
-		if (*pos2 == '\"') {
+		if (*pos2 == '{') {
+			/* Length field of a nested block: reserve len bytes
+			 * (initialised to 0) and push them for later
+			 * back-fill when the matching "}" is seen.
+			 */
+			if (brace_sp >= (int)(sizeof(brace_stack) /
+					      sizeof(brace_stack[0]))) {
+				printf("Line %d: nested blocks too deep\n",
+				       *ln);
+				errors++;
+				continue;
+			}
+			memset(buf, 0, len);
+			brace_stack[brace_sp].len_ptr = buf;
+			brace_stack[brace_sp].len_bytes = len;
+			brace_stack[brace_sp].size_at_open = *size;
+			brace_sp++;
+			buf += len;
+		} else if (*pos2 == '\"') {
 			pos2++;
 			pos3 = strchr(pos2, '\"');
 			if (pos3 == NULL) {
